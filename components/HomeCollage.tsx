@@ -80,6 +80,8 @@ function GalleryPanel({ tile, onHoverChange }: { tile: LaidOutTile; onHoverChang
 
   const basePos = useMemo(() => new THREE.Vector3(...tile.position), [tile.position]);
   const lookTarget = useMemo(() => new THREE.Vector3(0, tile.position[1], tile.position[2]), [tile.position]);
+  // reusable dummy used purely to compute a correct "face toward X" quaternion each frame
+  const dummy = useMemo(() => new THREE.Object3D(), []);
 
   useFrame((state, delta) => {
     if (!group.current) return;
@@ -91,22 +93,22 @@ function GalleryPanel({ tile, onHoverChange }: { tile: LaidOutTile; onHoverChang
       const targetPos = basePos.clone().add(dirToCam.multiplyScalar(1.6));
       group.current.position.lerp(targetPos, t);
 
-      const targetQuat = new THREE.Quaternion();
-      const m = new THREE.Matrix4().lookAt(group.current.position, camera.position, new THREE.Vector3(0, 1, 0));
-      targetQuat.setFromRotationMatrix(m);
-      group.current.quaternion.slerp(targetQuat, t);
+      dummy.position.copy(group.current.position);
+      dummy.lookAt(camera.position);
+      // note: Object3D.lookAt() on a plain mesh points its local +Z at the target
+      // (unlike a camera, whose -Z points at the target) — no extra flip needed here
+      group.current.quaternion.slerp(dummy.quaternion, t);
 
       group.current.scale.lerp(new THREE.Vector3(1.22, 1.22, 1.22), t);
     } else {
       group.current.position.lerp(basePos, t);
 
-      const targetQuat = new THREE.Quaternion();
-      const m = new THREE.Matrix4().lookAt(basePos, lookTarget, new THREE.Vector3(0, 1, 0));
-      // lookAt builds a matrix as if the object sits at eye looking at target;
-      // we want the panel's forward (+z) to face the axis, so flip it
-      const euler = new THREE.Euler().setFromRotationMatrix(m);
-      targetQuat.setFromEuler(new THREE.Euler(euler.x, euler.y + Math.PI, euler.z));
-      group.current.quaternion.slerp(targetQuat, t);
+      // bias the rest orientation partway toward the camera (not just the straight axis)
+      // so panels read as gently turning to greet you as you pass, rather than sitting flat
+      const biasedTarget = lookTarget.clone().lerp(camera.position, 0.35);
+      dummy.position.copy(basePos);
+      dummy.lookAt(biasedTarget);
+      group.current.quaternion.slerp(dummy.quaternion, t);
 
       group.current.scale.lerp(new THREE.Vector3(1, 1, 1), t);
     }
