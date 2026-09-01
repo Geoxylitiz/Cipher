@@ -1,0 +1,8 @@
+{
+  "name": "Cipher Studio Clone",
+  "description": "A pixel-accurate clone of the cipher.tv creative production studio website.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
