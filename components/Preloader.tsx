@@ -3,29 +3,31 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { usePathname } from 'next/navigation';
+import { useProgress } from '@react-three/drei';
 
 export default function Preloader() {
   const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState(0);
   const pathname = usePathname();
+  const { active, loaded, total, progress } = useProgress();
 
   useEffect(() => {
-    let active = true;
-    
-    // Simulate loading
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setTimeout(() => setLoading(false), 200); // short delay after 100%
-          return 100;
-        }
-        return prev + Math.floor(Math.random() * 15) + 5;
-      });
-    }, 100);
+    setLoading(true);
 
-    return () => clearInterval(interval);
-  }, [pathname]);
+    // Only the home page has a Three.js scene to wait for. Other routes do
+    // not have Drei assets, so let their route-change preloader dismiss on
+    // the next frame instead of waiting for a nonexistent loader.
+    if (pathname !== '/') {
+      const frame = requestAnimationFrame(() => setLoading(false));
+      return () => cancelAnimationFrame(frame);
+    }
+
+    // useProgress is updated by Drei's loaders (including <Image /> and
+    // <Preload all />). Keep the overlay up until every asset is complete.
+    if (!active && total > 0 && loaded === total) {
+      const timeout = window.setTimeout(() => setLoading(false), 200);
+      return () => window.clearTimeout(timeout);
+    }
+  }, [pathname, active, loaded, total]);
 
   return (
     <AnimatePresence>
@@ -52,7 +54,7 @@ export default function Preloader() {
               exit={{ opacity: 0 }}
               className="text-4xl md:text-8xl font-medium tracking-tighter"
             >
-              {progress}%
+              {Math.round(progress)}%
             </motion.div>
           )}
         </motion.div>

@@ -9,12 +9,12 @@ import { useRouter } from 'next/navigation';
 import { homeTilesData } from '@/data/works';
 
 /* ------------------------------------------------------------------ */
-/*  Layout — turn the flat tile list into a winding 3D corridor        */
+/*  Layout — turn the flat tile list into two museum walls             */
 /* ------------------------------------------------------------------ */
 
-const GOLDEN_ANGLE = 2.399963; // radians, keeps the spiral from ever lining panels up
-const RING_SPACING = 4.6; // distance between panels along the walk axis
-const BASE_RADIUS = 5.2;
+const RING_SPACING = 4.6; // distance between panels along the corridor (z axis)
+const WALL_OFFSET = 5.2;  // distance of each wall from the center walkway
+const EYE_LEVEL = 0.15;   // slight lift so panels sit at a natural eye height
 const PANEL_W = 3.1;
 const PANEL_H = 2.05;
 
@@ -28,13 +28,11 @@ type LaidOutTile = {
 
 function layoutTiles(tiles: typeof homeTilesData): LaidOutTile[] {
   return tiles.map((tile, i) => {
-    const angle = i * GOLDEN_ANGLE;
-    // gentle breathing radius so the corridor isn't a perfect cylinder
-    const radiusJitter = 1 + 0.22 * Math.sin(i * 0.9);
-    const radius = BASE_RADIUS * radiusJitter;
-    const x = Math.cos(angle) * radius;
-    const z = -i * RING_SPACING;
-    const y = Math.sin(i * 0.55) * 1.6;
+    // alternate left/right walls, walking straight down the corridor
+    const side = i % 2 === 0 ? -1 : 1;
+    const x = side * WALL_OFFSET;
+    const y = EYE_LEVEL;
+    const z = -i * RING_SPACING + -6;
 
     return {
       id: tile.id,
@@ -98,11 +96,7 @@ function GalleryPanel({ tile, onHoverChange }: { tile: LaidOutTile; onHoverChang
       img.current.material.color.lerp(new THREE.Color(targetBrightness, targetBrightness, targetBrightness), t);
     }
 
-    if (glow.current) {
-      const targetOpacity = hovered ? 0.55 : 0;
-      const mat = glow.current.material as THREE.MeshBasicMaterial;
-      mat.opacity = THREE.MathUtils.lerp(mat.opacity, targetOpacity, t);
-    }
+   
   });
 
   const handleOver = useCallback((e: ThreeEvent<PointerEvent>) => {
@@ -357,7 +351,7 @@ export default function HomeCollage() {
       <Canvas
         dpr={[1, 2]}
         gl={{ antialias: true, powerPreference: 'high-performance' }}
-        camera={{ fov: 55, near: 0.1, far: 100, position: [0, 0, 0] }}
+        camera={{ fov: 60, near: 0.1, far: 100, position: [0, 0, 0] }}
         className="absolute inset-0 z-10"
       >
         <Suspense fallback={null}>
