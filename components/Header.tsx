@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import LogoMark from './LogoMark';
 
 export default function Header() {
   return (
@@ -6,15 +7,8 @@ export default function Header() {
       <div className="flex flex-col gap-2 pointer-events-auto">
         <Link href="/" className="text-xl tracking-tight uppercase font-medium hover:opacity-70 transition-opacity">
           Meowhlock
+          <LogoMark className="inline-block w-6 h-6 ml-2 -mt-1" />
         </Link>
-        <a 
-          href="https://www.studiojour.paris/" 
-          target="_blank" 
-          rel="noopener noreferrer" 
-          className="text-[10px] tracking-widest uppercase opacity-50 hover:opacity-100 transition-opacity mt-1"
-        >
-          Design by Studio Jour
-        </a>
       </div>
       
       <nav className="flex flex-col items-end gap-1 pointer-events-auto">

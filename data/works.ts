@@ -14,13 +14,18 @@ export const worksData = [
 ];
 
 export const homeTilesData = [
-  { id: 1, src: 'https://picsum.photos/seed/cipher1/800/1000', alt: 'Perfume glassware', className: 'w-48 h-32 md:w-60 md:h-40', offsetX: 60, offsetY: -260 },
-  { id: 2, src: 'https://picsum.photos/seed/cipher2/600/800', alt: 'Gold perfume bottle', className: 'w-56 h-36 md:w-72 md:h-44', offsetX: 360, offsetY: -160 },
-  { id: 3, src: 'https://picsum.photos/seed/cipher5/800/1200', alt: 'BW fashion', className: 'w-56 h-36 md:w-72 md:h-44', offsetX: 400, offsetY: 60 },
-  { id: 4, src: 'https://picsum.photos/seed/cipher11/800/800', alt: 'Silhouette', className: 'w-64 h-48 md:w-80 md:h-56', offsetX: 220, offsetY: 280 },
-  { id: 5, src: 'https://picsum.photos/seed/cipher10/600/800', alt: 'Candlesticks still life', className: 'w-40 h-56 md:w-56 md:h-72', offsetX: -80, offsetY: 320 },
-  { id: 6, src: 'https://picsum.photos/seed/cipher8/1200/800', alt: 'Editorial fashion lawn', className: 'w-48 h-48 md:w-64 md:h-64', offsetX: -320, offsetY: 240 },
-  { id: 7, src: 'https://picsum.photos/seed/cipher7/1000/800', alt: 'Still life rug', className: 'w-48 h-32 md:w-60 md:h-40', offsetX: -420, offsetY: 60 },
-  { id: 8, src: 'https://picsum.photos/seed/cipher3/800/800', alt: 'Beauty skincare', className: 'w-64 h-40 md:w-80 md:h-52', offsetX: -320, offsetY: -180 },
-  { id: 9, src: 'https://picsum.photos/seed/cipher4/800/600', alt: 'Landscape back of head', className: 'w-48 h-36 md:w-64 md:h-48', offsetX: -120, offsetY: -240 },
+  { id: 1, src: 'https://picsum.photos/seed/cipher1/800/1000', alt: 'Perfume glassware', className: 'w-48 h-32 md:w-60 md:h-40',  },
+  { id: 2, src: 'https://picsum.photos/seed/cipher2/600/800', alt: 'Gold perfume bottle', className: 'w-56 h-36 md:w-72 md:h-44',},
+  { id: 3, src: 'https://picsum.photos/seed/cipher5/800/1200', alt: 'BW fashion', className: 'w-56 h-36 md:w-72 md:h-44'},
+  { id: 4, src: 'https://picsum.photos/seed/cipher11/800/800', alt: 'Silhouette', className: 'w-64 h-48 md:w-80 md:h-56',  },
+  { id: 5, src: 'https://picsum.photos/seed/cipher10/600/800', alt: 'Candlesticks still life', className: 'w-40 h-56 md:w-56 md:h-72' },
+  { id: 6, src: 'https://picsum.photos/seed/cipher8/1200/800', alt: 'Editorial fashion lawn', className: 'w-48 h-48 md:w-64 md:h-64' },
+  { id: 7, src: 'https://picsum.photos/seed/cipher7/1000/800', alt: 'Still life rug', className: 'w-48 h-32 md:w-60 md:h-40' },
+  { id: 8, src: 'https://picsum.photos/seed/cipher3/800/800', alt: 'Beauty skincare', className: 'w-64 h-40 md:w-80 md:h-52'},
+  { id: 9, src: 'https://picsum.photos/seed/cipher4/800/600', alt: 'Landscape back of head', className: 'w-48 h-36 md:w-64 md:h-48' },
+   { id: 10, src: 'https://picsum.photos/seed/cipher4/800/600', alt: 'Landscape back of head', className: 'w-48 h-36 md:w-64 md:h-48' },
+    { id: 11, src: 'https://picsum.photos/seed/cipher4/800/600', alt: 'Landscape back of head', className: 'w-48 h-36 md:w-64 md:h-48' },
+     { id: 12, src: 'https://picsum.photos/seed/cipher4/800/600', alt: 'Landscape back of head', className: 'w-48 h-36 md:w-64 md:h-48' },
+      { id: 13, src: 'https://picsum.photos/seed/cipher4/800/600', alt: 'Landscape back of head', className: 'w-48 h-36 md:w-64 md:h-48' },
+       { id: 14, src: 'https://picsum.photos/seed/cipher4/800/600', alt: 'Landscape back of head', className: 'w-48 h-36 md:w-64 md:h-48' },
 ];

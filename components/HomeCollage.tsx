@@ -1,31 +1,11 @@
 'use client';
 
-/**
- * HomeCollage — 3D walk-through gallery
- * ---------------------------------------------------------------
- * Drop-in replacement for the old 2D rotating collage. Renders the
- * same `homeTilesData` set as floating panels along a winding
- * corridor in 3D space. Scroll / drag to walk forward through it,
- * move your mouse to look around, hover a panel to wake it up,
- * click to open /works.
- *
- * New dependencies (install before using):
- *   npm i three @react-three/fiber @react-three/drei @react-three/postprocessing
- *
- * Both @react-three/fiber and @react-three/drei must be client-only —
- * this file is already marked 'use client', and it should be loaded
- * from its parent with next/dynamic and ssr: false, e.g.:
- *
- *   const HomeCollage = dynamic(() => import('@/components/HomeCollage'), { ssr: false });
- */
-
 import { Suspense, useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { Image as DreiImage, Html, Preload } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { useRouter } from 'next/navigation';
-import LogoMark from '@/components/LogoMark';
 import { homeTilesData } from '@/data/works';
 
 /* ------------------------------------------------------------------ */
@@ -355,7 +335,6 @@ export default function HomeCollage() {
         className="absolute inset-0 flex items-start justify-center pt-10 z-20 pointer-events-none transition-opacity duration-700"
         style={{ opacity: anyHovered ? 0.15 : 1 }}
       >
-        <LogoMark className="w-16 h-16 text-white" />
       </div>
 
       {/* Scroll hint */}
