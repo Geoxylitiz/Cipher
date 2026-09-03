@@ -22,12 +22,12 @@ export default function Footer() {
         
         <div className="flex flex-col gap-1">
           <span className="opacity-50">Contact</span>
-          <a href="mailto:prod@cipher.tv" className="hover:opacity-70 transition-opacity">Work with us</a>
+          <a href="mailto:" className="hover:opacity-70 transition-opacity">Work with us</a>
         </div>
         
         <div className="flex flex-col gap-1">
           <span className="opacity-50">Socials</span>
-          <a href="https://instagram.com/cipher.tv" target="_blank" rel="noopener noreferrer" className="hover:opacity-70 transition-opacity">Instagram</a>
+          <a href="https://instagram.com" target="_blank" rel="noopener noreferrer" className="hover:opacity-70 transition-opacity">Instagram</a>
           <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer" className="hover:opacity-70 transition-opacity">LinkedIn</a>
         </div>
       </div>
