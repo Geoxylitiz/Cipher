@@ -16,15 +16,16 @@ import { MeshReflectorMaterial } from '@react-three/drei';
  * full length of the walkway.
  */
 export default function Floor({
-  depth = 40,
+  zFront = 10,
+  zBack = -40,
   width = 14,
   y = -1.8,
   color = '#050505',
 }) {
   // Plane is authored flat on XY, so we rotate it -90° on X to lay it
-  // horizontal, then push it back so it's centered under the whole corridor
-  // (corridor panels run from z = -6 to z = -6 - depth).
-  const centerZ = -6 - depth / 2;
+  // horizontal, then centre it between the front and back of the gallery.
+  const centerZ = (zFront + zBack) / 2;
+  const length = zFront - zBack;
 
   return (
     <mesh
@@ -32,21 +33,23 @@ export default function Floor({
       position={[0, y, centerZ]}
       receiveShadow
     >
-      <planeGeometry args={[width, depth + 24]} />
+      <planeGeometry args={[width, length]} />
       <MeshReflectorMaterial
         // blur softens the reflection so it doesn't look like a literal mirror
-        blur={[400, 120]}
+        blur={[300, 90]}
         resolution={1024}
-        mixBlur={1}
-        mixStrength={40}
-        roughness={0.9}
-        // depth-based fade keeps reflections from feeling infinite/flat
-        depthScale={1.1}
-        minDepthThreshold={0.4}
-        maxDepthThreshold={1.3}
+        mixBlur={0.8}
+        mixStrength={18}
+        roughness={0.7}
+        // depth-based fade: reflections soften with height above the floor.
+        // Thresholds must reach the artworks (hung ~1.5–3.5 units up) or
+        // their reflections are faded out entirely.
+        depthScale={0.8}
+        minDepthThreshold={0.2}
+        maxDepthThreshold={5}
         color={color}
-        metalness={0.55}
-        mirror={0}
+        metalness={0.4}
+        mirror={0.6}
       />
     </mesh>
   );
