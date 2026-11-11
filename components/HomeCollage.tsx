@@ -1,7 +1,7 @@
 'use client';
 import { Suspense, useMemo, useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { Preload, useTexture } from '@react-three/drei';
+import { PerformanceMonitor, Preload, useTexture } from '@react-three/drei';
 import {
   EffectComposer,
   Bloom,
@@ -17,7 +17,9 @@ import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
 import { ROOMS, galleryWorks } from '@/data/gallery';
 import { canvasFamily, useFontsReady, SERIF_STACK, MONO_STACK } from '@/lib/fonts';
-import { isIntroDone, setCursorLabel, RETURN_STOP_KEY } from '@/lib/ui-events';
+import { isIntroDone, onIntroDone, setCursorLabel, RETURN_STOP_KEY } from '@/lib/ui-events';
+import { detectQuality, rememberLowQuality, type Quality } from '@/lib/quality';
+import { PLASTER_MAPS, useSurface, type Surface } from '@/lib/surfaces';
 import Floor from './floor';
 
 /* ------------------------------------------------------------------ */
@@ -238,6 +240,17 @@ type NavState = {
   jump: boolean;           // place the camera instantly (returning from a project)
 };
 
+/* Scanned plaster surfaces (see lib/surfaces.ts) */
+// Walls are painted, not raw plaster: only the scan's relief (normal + roughness)
+// is used, so the spotlights rake across real surface texture on clean paint.
+// (Before Phase 4 the generated wall texture was set after the material compiled
+// and never applied, so walls rendered plain white; these colours keep that look.)
+const WALL_TINT = '#d9d3c9';
+const PILASTER_TINT = '#77716a';
+const CEILING_TINT = '#1a1a1d';
+const NORMAL_SCALE = new THREE.Vector2(0.5, 0.5);
+const relief = (s: Surface) => ({ normalMap: s.normalMap, roughnessMap: s.roughnessMap });
+
 /* ------------------------------------------------------------------ */
 /*  Museum Architecture — walls, ceiling, pilasters, track, benches    */
 /* ------------------------------------------------------------------ */
@@ -260,10 +273,9 @@ function Bench({ z }: { z: number }) {
   );
 }
 
-function Pilaster({ x, z, height, wallTexture, wallBump }: {
+function Pilaster({ x, z, height, surface }: {
   x: number; z: number; height: number;
-  wallTexture: THREE.CanvasTexture | null;
-  wallBump: THREE.CanvasTexture | null;
+  surface: Surface;
 }) {
   const baseH = 0.4;
   const abacusH = 0.1;
@@ -292,10 +304,7 @@ function Pilaster({ x, z, height, wallTexture, wallBump }: {
       </mesh>
       <mesh position={[0, shaftY, 0]}>
         <boxGeometry args={[shaftW, shaftH, shaftD]} />
-        <meshStandardMaterial
-          color="#5a5652" roughness={0.7} metalness={0.1}
-          map={wallTexture ?? undefined} bumpMap={wallBump ?? undefined} bumpScale={0.03}
-        />
+        <meshStandardMaterial color={PILASTER_TINT} roughness={1} metalness={0} {...relief(surface)} normalScale={NORMAL_SCALE} />
       </mesh>
       {[-0.09, -0.03, 0.03, 0.09].map((offset, i) => (
         <mesh key={i} position={[offset, shaftY, shaftD / 2 - 0.005]}>
@@ -339,11 +348,10 @@ function useRoomTitleTexture(numeral: string, name: string) {
   }, [numeral, name, fontsReady]);
 }
 
-function Partition({ z, room, wallTexture, wallBump }: {
+function Partition({ z, room, surface }: {
   z: number;
   room: number;
-  wallTexture: THREE.CanvasTexture | null;
-  wallBump: THREE.CanvasTexture | null;
+  surface: Surface;
 }) {
   const height = CEILING_Y - FLOOR_Y;
   const sideW = WALL_X - DOOR_W / 2;
@@ -351,13 +359,7 @@ function Partition({ z, room, wallTexture, wallBump }: {
   const lintelY = FLOOR_Y + DOOR_H + lintelH / 2;
   const title = useRoomTitleTexture(ROOMS[room].numeral, ROOMS[room].name);
   const material = (
-    <meshStandardMaterial
-      color="#ffffff"
-      roughness={0.85}
-      map={wallTexture ?? undefined}
-      bumpMap={wallBump ?? undefined}
-      bumpScale={0.04}
-    />
+    <meshStandardMaterial color={WALL_TINT} roughness={1} metalness={0} {...relief(surface)} normalScale={NORMAL_SCALE} />
   );
 
   return (
@@ -399,221 +401,19 @@ function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
   const centerZ = (layout.zFront + layout.zBack) / 2;
   const corridorLength = layout.zFront - layout.zBack;
 
-  const [wallTexture, setWallTexture] = useState<THREE.CanvasTexture | null>(null);
-  const [wallBump, setWallBump] = useState<THREE.CanvasTexture | null>(null);
-  const [ceilingTexture, setCeilingTexture] = useState<THREE.CanvasTexture | null>(null);
-  const [trimTexture, setTrimTexture] = useState<THREE.CanvasTexture | null>(null);
-
-  // Procedural Texture Generation
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    let isMounted = true;
-
-    // --- WALL COLOR TEXTURE ---
-    // Mid-tone warm grey: the room reads dark because of the lighting,
-    // not because the paint is black — that's what lets light pools show.
-    const size = 1024;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d')!;
-
-    ctx.fillStyle = '#4a4642';
-    ctx.fillRect(0, 0, size, size);
-
-    for (let i = 0; i < 120; i++) {
-      const x = Math.random() * size;
-      const y = Math.random() * size;
-      const r = Math.random() * 250 + 100;
-      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-      const alpha = Math.random() * 0.05;
-      grad.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
-      grad.addColorStop(1, `rgba(0, 0, 0, 0)`);
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, size, size);
-    }
-
-    for (let i = 0; i < 80; i++) {
-      const x = Math.random() * size;
-      const y = Math.random() * size;
-      const r = Math.random() * 300 + 150;
-      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-      const alpha = Math.random() * 0.1;
-      grad.addColorStop(0, `rgba(0, 0, 0, ${alpha})`);
-      grad.addColorStop(1, `rgba(0, 0, 0, 0)`);
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, size, size);
-    }
-
-    const imageData = ctx.getImageData(0, 0, size, size);
-    const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const noise = (Math.random() - 0.5) * 10;
-      data[i] = Math.max(0, Math.min(255, data[i] + noise));
-      data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise));
-      data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise));
-    }
-    ctx.putImageData(imageData, 0, 0);
-
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 16;
-
-    // --- WALL BUMP TEXTURE ---
-    const bumpSize = 512;
-    const bumpCanvas = document.createElement('canvas');
-    bumpCanvas.width = bumpSize;
-    bumpCanvas.height = bumpSize;
-    const bumpCtx = bumpCanvas.getContext('2d')!;
-
-    const bumpImgData = bumpCtx.createImageData(bumpSize, bumpSize);
-    const bumpData = bumpImgData.data;
-
-    const noiseGrid = new Float32Array(bumpSize * bumpSize);
-    for (let i = 0; i < noiseGrid.length; i++) noiseGrid[i] = Math.random();
-
-    const blur = (input: Float32Array, output: Float32Array, w: number, h: number) => {
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          let sum = 0;
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              const ny = (y + dy + h) % h;
-              const nx = (x + dx + w) % w;
-              sum += input[ny * w + nx];
-            }
-          }
-          output[y * w + x] = sum / 9;
-        }
-      }
-    };
-
-    const temp = new Float32Array(bumpSize * bumpSize);
-    blur(noiseGrid, temp, bumpSize, bumpSize);
-    blur(temp, noiseGrid, bumpSize, bumpSize);
-    blur(noiseGrid, temp, bumpSize, bumpSize);
-    blur(temp, noiseGrid, bumpSize, bumpSize);
-
-    for (let i = 0; i < bumpSize * bumpSize; i++) {
-      const val = noiseGrid[i] * 255;
-      bumpData[i * 4] = val;
-      bumpData[i * 4 + 1] = val;
-      bumpData[i * 4 + 2] = val;
-      bumpData[i * 4 + 3] = 255;
-    }
-    bumpCtx.putImageData(bumpImgData, 0, 0);
-
-    for (let i = 0; i < 4000; i++) {
-      const x = Math.random() * bumpSize;
-      const y = Math.random() * bumpSize;
-      const r = Math.random() * 1.5 + 0.5;
-      bumpCtx.fillStyle = `rgba(255,255,255,${Math.random() * 0.35})`;
-      bumpCtx.beginPath();
-      bumpCtx.arc(x, y, r, 0, Math.PI * 2);
-      bumpCtx.fill();
-    }
-
-    const bumpTex = new THREE.CanvasTexture(bumpCanvas);
-    bumpTex.wrapS = bumpTex.wrapT = THREE.RepeatWrapping;
-    bumpTex.anisotropy = 16;
-
-    // --- CEILING TEXTURE ---
-    const ceilCanvas = document.createElement('canvas');
-    ceilCanvas.width = size;
-    ceilCanvas.height = size;
-    const ceilCtx = ceilCanvas.getContext('2d')!;
-    ceilCtx.fillStyle = '#0f0f11';
-    ceilCtx.fillRect(0, 0, size, size);
-
-    for (let i = 0; i < 60; i++) {
-      const x = Math.random() * size;
-      const y = Math.random() * size;
-      const r = Math.random() * 300 + 100;
-      const grad = ceilCtx.createRadialGradient(x, y, 0, x, y, r);
-      const alpha = Math.random() * 0.04;
-      grad.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
-      grad.addColorStop(1, `rgba(0, 0, 0, 0)`);
-      ceilCtx.fillStyle = grad;
-      ceilCtx.fillRect(0, 0, size, size);
-    }
-
-    const ceilImgData = ceilCtx.getImageData(0, 0, size, size);
-    const ceilData = ceilImgData.data;
-    for (let i = 0; i < ceilData.length; i += 4) {
-      const noise = (Math.random() - 0.5) * 6;
-      ceilData[i] = Math.max(0, Math.min(255, ceilData[i] + noise));
-      ceilData[i + 1] = Math.max(0, Math.min(255, ceilData[i + 1] + noise));
-      ceilData[i + 2] = Math.max(0, Math.min(255, ceilData[i + 2] + noise));
-    }
-    ceilCtx.putImageData(ceilImgData, 0, 0);
-
-    const ceilTex = new THREE.CanvasTexture(ceilCanvas);
-    ceilTex.wrapS = ceilTex.wrapT = THREE.RepeatWrapping;
-    ceilTex.colorSpace = THREE.SRGBColorSpace;
-    ceilTex.anisotropy = 16;
-
-    // --- TRIM TEXTURE (Baseboards/Crown) ---
-    const trimCanvas = document.createElement('canvas');
-    trimCanvas.width = 512;
-    trimCanvas.height = 512;
-    const trimCtx = trimCanvas.getContext('2d')!;
-    trimCtx.fillStyle = '#0a0a0a';
-    trimCtx.fillRect(0, 0, 512, 512);
-
-    for (let y = 0; y < 512; y++) {
-      const noise = (Math.random() - 0.5) * 8;
-      trimCtx.fillStyle = `rgba(255, 255, 255, ${Math.abs(noise) / 255 * 0.5})`;
-      trimCtx.fillRect(0, y, 512, 1);
-    }
-    const trimTex = new THREE.CanvasTexture(trimCanvas);
-    trimTex.wrapS = trimTex.wrapT = THREE.RepeatWrapping;
-    trimTex.colorSpace = THREE.SRGBColorSpace;
-
-    if (isMounted) {
-      setWallTexture(tex);
-      setWallBump(bumpTex);
-      setCeilingTexture(ceilTex);
-      setTrimTexture(trimTex);
-    }
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (wallTexture && wallBump) {
-      const repeatX = corridorLength / 3.5;
-      const repeatY = height / 3.5;
-      wallTexture.repeat.set(repeatX, repeatY);
-      wallBump.repeat.set(repeatX, repeatY);
-      wallTexture.needsUpdate = true;
-      wallBump.needsUpdate = true;
-    }
-    if (ceilingTexture) {
-      ceilingTexture.repeat.set(corridorLength / 5, (WALL_X * 2) / 5);
-      ceilingTexture.needsUpdate = true;
-    }
-    if (trimTexture) {
-      trimTexture.repeat.set(corridorLength / 2, 1);
-      trimTexture.needsUpdate = true;
-    }
-  }, [wallTexture, wallBump, ceilingTexture, trimTexture, corridorLength, height]);
+  // Scanned plaster (Poly Haven, CC0) — each surface gets its own tiling
+  const wall = useSurface(PLASTER_MAPS, corridorLength / 3, height / 3);
+  const endWall = useSurface(PLASTER_MAPS, (WALL_X * 2) / 3, height / 3);
+  const ceiling = useSurface(PLASTER_MAPS, (WALL_X * 2) / 4, corridorLength / 4);
+  const pilaster = useSurface(PLASTER_MAPS, 0.25, height / 3);
+  const partition = useSurface(PLASTER_MAPS, 1.6, height / 3);
 
   return (
     <group>
       {/* Ceiling */}
       <mesh position={[0, CEILING_Y, centerZ]} rotation={[Math.PI / 2, 0, 0]}>
         <planeGeometry args={[WALL_X * 2, corridorLength]} />
-        <meshStandardMaterial
-          color="#0f0f11"
-          roughness={0.9}
-          metalness={0.05}
-          map={ceilingTexture}
-          bumpMap={wallBump}
-          bumpScale={0.02}
-        />
+        <meshStandardMaterial color={CEILING_TINT} roughness={1} metalness={0} {...relief(ceiling)} normalScale={NORMAL_SCALE} />
       </mesh>
 
       {/* Ceiling light tracks */}
@@ -632,33 +432,19 @@ function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
           rotation={[0, -side * Math.PI / 2, 0]}
         >
           <planeGeometry args={[corridorLength, height]} />
-          <meshStandardMaterial
-            color="#ffffff"
-            roughness={0.85}
-            metalness={0}
-            map={wallTexture}
-            bumpMap={wallBump}
-            bumpScale={0.05}
-          />
+          <meshStandardMaterial color={WALL_TINT} roughness={1} metalness={0} {...relief(wall)} normalScale={NORMAL_SCALE} />
         </mesh>
       ))}
 
       {/* End wall — home of the closing piece */}
       <mesh position={[0, FLOOR_Y + height / 2, layout.zBack]}>
         <planeGeometry args={[WALL_X * 2, height]} />
-        <meshStandardMaterial
-          color="#ffffff"
-          roughness={0.85}
-          metalness={0}
-          map={wallTexture}
-          bumpMap={wallBump}
-          bumpScale={0.05}
-        />
+        <meshStandardMaterial color={WALL_TINT} roughness={1} metalness={0} {...relief(endWall)} normalScale={NORMAL_SCALE} />
       </mesh>
 
       {/* Doorways between rooms */}
       {layout.partitions.map((p) => (
-        <Partition key={`partition-${p.room}`} z={p.z} room={p.room} wallTexture={wallTexture} wallBump={wallBump} />
+        <Partition key={`partition-${p.room}`} z={p.z} room={p.room} surface={partition} />
       ))}
 
       {/* Baseboards + crown moulding */}
@@ -666,11 +452,11 @@ function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
         <group key={`trim-${side}`}>
           <mesh position={[side * (WALL_X - 0.05), FLOOR_Y + 0.15, centerZ]}>
             <boxGeometry args={[0.1, 0.3, corridorLength]} />
-            <meshStandardMaterial color="#0a0a0a" roughness={0.4} metalness={0.3} map={trimTexture} />
+            <meshStandardMaterial color="#0a0a0a" roughness={0.4} metalness={0.3} />
           </mesh>
           <mesh position={[side * (WALL_X - 0.05), CEILING_Y - 0.15, centerZ]}>
             <boxGeometry args={[0.1, 0.3, corridorLength]} />
-            <meshStandardMaterial color="#0a0a0a" roughness={0.4} metalness={0.3} map={trimTexture} />
+            <meshStandardMaterial color="#0a0a0a" roughness={0.4} metalness={0.3} />
           </mesh>
         </group>
       ))}
@@ -683,8 +469,7 @@ function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
           x={-w.side * (WALL_X - 0.2)}
           z={w.position[2]}
           height={height - 0.6}
-          wallTexture={wallTexture}
-          wallBump={wallBump}
+          surface={pilaster}
         />
       ))}
 
@@ -767,18 +552,52 @@ function LightBeam({ rig, color, intensity }: {
 /* ------------------------------------------------------------------ */
 /*  Track fixture + spotlight aimed at one artwork                     */
 /* ------------------------------------------------------------------ */
-function ArtSpotlight({ rig, color, ceilingLocalY, intensity }: {
+/**
+ * Low-quality stand-in for a spotlight: a soft additive pool painted on the
+ * wall behind the frame. No real light, so no per-pixel lighting cost.
+ */
+function WallWash({ width, height, color, intensity }: {
+  width: number;
+  height: number;
+  color: string;
+  intensity: React.MutableRefObject<number>;
+}) {
+  const mat = useRef<THREE.MeshBasicMaterial>(null);
+  const texture = useMemo(() => getPoolTexture(), []);
+  useFrame(() => {
+    if (mat.current) mat.current.opacity = 0.2 * intensity.current;
+  });
+  if (!texture) return null;
+  return (
+    <mesh position={[0, 0.25, -0.09]} raycast={() => null}>
+      <planeGeometry args={[width * 1.9, height * 2]} />
+      <meshBasicMaterial
+        ref={mat}
+        map={texture}
+        color={color}
+        transparent
+        opacity={0.2}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+      />
+    </mesh>
+  );
+}
+
+function ArtSpotlight({ rig, color, ceilingLocalY, intensity, lit, washSize }: {
   rig: SpotRig;
   color: string;
   ceilingLocalY: number;
   intensity: React.MutableRefObject<number>;
+  lit: boolean;               // false = low quality: fake the light pool instead
+  washSize: [number, number];
 }) {
   const spot = useRef<THREE.SpotLight>(null);
   const target = useRef<THREE.Object3D>(null);
 
   useLayoutEffect(() => {
     if (spot.current && target.current) spot.current.target = target.current;
-  }, []);
+  }, [lit]);
 
   useFrame(() => {
     if (spot.current) spot.current.intensity = rig.intensity * intensity.current;
@@ -805,17 +624,23 @@ function ArtSpotlight({ rig, color, ceilingLocalY, intensity }: {
         <meshStandardMaterial color="#fff" emissive={color} emissiveIntensity={6} toneMapped={false} />
       </mesh>
 
-      <spotLight
-        ref={spot}
-        position={rig.spot}
-        angle={rig.angle}
-        penumbra={0.7}
-        intensity={rig.intensity}
-        distance={16}
-        decay={2}
-        color={color}
-      />
-      <object3D ref={target} position={rig.target} />
+      {lit ? (
+        <>
+          <spotLight
+            ref={spot}
+            position={rig.spot}
+            angle={rig.angle}
+            penumbra={0.7}
+            intensity={rig.intensity}
+            distance={16}
+            decay={2}
+            color={color}
+          />
+          <object3D ref={target} position={rig.target} />
+        </>
+      ) : (
+        <WallWash width={washSize[0]} height={washSize[1]} color={color} intensity={intensity} />
+      )}
       <LightBeam rig={rig} color={color} intensity={intensity} />
     </group>
   );
@@ -925,14 +750,16 @@ function useLabelTexture(index: number, title: string, category: string) {
 /* ------------------------------------------------------------------ */
 /*  A single framed artwork                                            */
 /* ------------------------------------------------------------------ */
-function GalleryPanel({ work, focused, anyFocused, onSelect, onHoverChange }: {
+function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange }: {
   work: GalleryWork;
   focused: boolean;
   anyFocused: boolean;
+  lit: boolean; // real spotlight (high quality) vs. faked glow (low quality)
   onSelect: (index: number) => void;
   onHoverChange: (hovered: boolean) => void;
 }) {
   const imageMat = useRef<THREE.MeshStandardMaterial>(null);
+  const matMat = useRef<THREE.MeshStandardMaterial>(null);
   const [hovered, setHovered] = useState(false);
   const lightLevel = useRef(1);
 
@@ -965,12 +792,14 @@ function GalleryPanel({ work, focused, anyFocused, onSelect, onHoverChange }: {
     const target = anyFocused ? (focused ? 1.6 : 0.2) : hovered ? 1.45 : 1;
     lightLevel.current = THREE.MathUtils.damp(lightLevel.current, target, 3.5, delta);
     if (imageMat.current) {
-      imageMat.current.emissiveIntensity = THREE.MathUtils.damp(
-        imageMat.current.emissiveIntensity,
-        hovered || focused ? 0.1 : anyFocused ? 0.005 : 0.03,
-        4,
-        delta
-      );
+      // Without a real spotlight (low quality) the work carries its own glow
+      const glow = lit
+        ? hovered || focused ? 0.1 : anyFocused ? 0.005 : 0.03
+        : hovered || focused ? 0.8 : anyFocused ? 0.12 : 0.55;
+      imageMat.current.emissiveIntensity = THREE.MathUtils.damp(imageMat.current.emissiveIntensity, glow, 4, delta);
+    }
+    if (matMat.current) {
+      matMat.current.emissiveIntensity = lit ? 0 : 0.3 * lightLevel.current;
     }
   });
 
@@ -1016,7 +845,7 @@ function GalleryPanel({ work, focused, anyFocused, onSelect, onHoverChange }: {
         {/* Passe-partout */}
         <mesh position={[0, 0, 0.002]} raycast={() => null}>
           <planeGeometry args={[PANEL_W + 2 * MAT, PANEL_H + 2 * MAT]} />
-          <meshStandardMaterial color="#e6e1d8" roughness={0.92} />
+          <meshStandardMaterial ref={matMat} color="#e6e1d8" roughness={0.92} emissive="#e6e1d8" emissiveIntensity={0} />
         </mesh>
 
         {/* The work itself — lit by the spotlight, not self-illuminated */}
@@ -1047,7 +876,14 @@ function GalleryPanel({ work, focused, anyFocused, onSelect, onHoverChange }: {
         </mesh>
       )}
 
-      <ArtSpotlight rig={work.spot} color={work.light} ceilingLocalY={ceilingLocalY} intensity={lightLevel} />
+      <ArtSpotlight
+        rig={work.spot}
+        color={work.light}
+        ceilingLocalY={ceilingLocalY}
+        intensity={lightLevel}
+        lit={lit}
+        washSize={[outerW, outerH]}
+      />
       <FloorPool
         y={FLOOR_Y - work.position[1] + 0.01}
         z={work.hero ? 2.4 : 0.9}
@@ -1274,6 +1110,7 @@ function FocusBlur({ stops, nav }: { stops: Stop[]; nav: React.MutableRefObject<
 /* ------------------------------------------------------------------ */
 function Dust({ count = 450, zFront, zBack }: { count?: number; zFront: number; zBack: number }) {
   const points = useRef<THREE.Points>(null);
+  const dustSprite = useMemo(() => getPoolTexture(), []);
   const positions = useMemo(() => {
     const arr = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
@@ -1296,7 +1133,16 @@ function Dust({ count = 450, zFront, zBack }: { count?: number; zFront: number; 
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
-      <pointsMaterial size={0.025} color="#ffd9b0" transparent opacity={0.14} sizeAttenuation depthWrite={false} />
+      {/* Round, soft-edged motes (plain points render as hard squares up close) */}
+      <pointsMaterial
+        size={0.03}
+        color="#ffd9b0"
+        transparent
+        opacity={0.16}
+        alphaMap={dustSprite ?? undefined}
+        sizeAttenuation
+        depthWrite={false}
+      />
     </points>
   );
 }
@@ -1304,10 +1150,12 @@ function Dust({ count = 450, zFront, zBack }: { count?: number; zFront: number; 
 /* ------------------------------------------------------------------ */
 /*  Scene                                                              */
 /* ------------------------------------------------------------------ */
-function Scene({ layout, nav, focused, onSelect, onStopChange, onUserMove, onAnyHover, progressDot }: {
+function Scene({ layout, nav, focused, quality, onDecline, onSelect, onStopChange, onUserMove, onAnyHover, progressDot }: {
   layout: GalleryLayout;
   nav: React.MutableRefObject<NavState>;
   focused: number | null;
+  quality: Quality;
+  onDecline: () => void;
   onSelect: (index: number) => void;
   onStopChange: (stop: number) => void;
   onUserMove: () => void;
@@ -1315,6 +1163,22 @@ function Scene({ layout, nav, focused, onSelect, onStopChange, onUserMove, onAny
   progressDot: React.RefObject<HTMLDivElement | null>;
 }) {
   const hoveredCount = useRef(0);
+  const high = quality === 'high';
+  const [monitoring, setMonitoring] = useState(false);
+
+  // Start watching frame rate only once the intro has settled — shader
+  // compiles and the entrance push-in would otherwise read as "slow".
+  useEffect(() => {
+    if (!high) return;
+    let timer = 0;
+    const off = onIntroDone(() => {
+      timer = window.setTimeout(() => setMonitoring(true), 4000);
+    });
+    return () => {
+      off();
+      window.clearTimeout(timer);
+    };
+  }, [high]);
 
   const handleHoverChange = useCallback((hovered: boolean) => {
     hoveredCount.current = Math.max(0, hoveredCount.current + (hovered ? 1 : -1));
@@ -1326,11 +1190,26 @@ function Scene({ layout, nav, focused, onSelect, onStopChange, onUserMove, onAny
       <fog attach="fog" args={['#070707', 8, 34]} />
       <color attach="background" args={['#070707']} />
 
-      {/* Almost no fill — the spotlights do the work */}
-      <ambientLight intensity={0.06} />
-      <hemisphereLight args={['#2a2420', '#050505', 0.15]} />
+      {/* Almost no fill — the spotlights do the work (a little more when faked) */}
+      <ambientLight intensity={high ? 0.06 : 0.12} />
+      <hemisphereLight args={['#2a2420', '#050505', high ? 0.15 : 0.3]} />
 
-      <Dust zFront={layout.zFront} zBack={layout.zBack} />
+      {high && monitoring && (
+        <PerformanceMonitor
+          // Judge over ~8s windows; downgrade if most samples sit under 24 fps
+          ms={500}
+          iterations={16}
+          bounds={() => [24, 1000]}
+          onDecline={({ fps }) => {
+            // Hidden or occluded views throttle to ~1 fps (sometimes while still
+            // reporting "visible"); a genuinely weak GPU lands around 10–25 fps.
+            if (document.visibilityState !== 'visible' || fps < 6) return;
+            onDecline();
+          }}
+        />
+      )}
+
+      <Dust zFront={layout.zFront} zBack={layout.zBack} count={high ? 450 : 200} />
 
       <Floor zFront={layout.zFront} zBack={layout.zBack} width={CORRIDOR_WIDTH} />
 
@@ -1342,6 +1221,7 @@ function Scene({ layout, nav, focused, onSelect, onStopChange, onUserMove, onAny
           work={work}
           focused={focused === work.index}
           anyFocused={focused !== null}
+          lit={high}
           onSelect={onSelect}
           onHoverChange={handleHoverChange}
         />
@@ -1376,6 +1256,17 @@ export default function HomeCollage() {
   const [, setAnyHovered] = useState(false);
   const [isDesktop, setIsDesktop] = useState(true);
   const [leavingTo, setLeavingTo] = useState<string | null>(null);
+  // Decided on the client before the canvas mounts, so materials compile once
+  const [quality, setQuality] = useState<Quality | null>(null);
+
+  useEffect(() => {
+    setQuality(detectQuality());
+  }, []);
+
+  const handleDecline = useCallback(() => {
+    rememberLowQuality();
+    setQuality('low');
+  }, []);
 
   // Coming back from a project page: reappear in front of the work you left
   useEffect(() => {
@@ -1627,36 +1518,49 @@ export default function HomeCollage() {
         )}
       </AnimatePresence>
 
-      <Canvas
-        dpr={[1, 2]}
-        gl={{ antialias: false, powerPreference: 'high-performance' }}
-        camera={{ fov: 60, near: 0.1, far: 100, position: [0, 0, CAMERA_START_Z] }}
-        className="absolute inset-0 z-10"
-        onPointerMissed={() => {
-          if (!nav.current.dragging && nav.current.focused !== null) setFocus(null);
-        }}
-      >
-        <Suspense fallback={null}>
-          <Scene
-            layout={layout}
-            nav={nav}
-            focused={focused}
-            onSelect={handleSelect}
-            onStopChange={setStop}
-            onUserMove={handleUserMove}
-            onAnyHover={setAnyHovered}
-            progressDot={progressDot}
-          />
-          <EffectComposer multisampling={4}>
-            <Bloom intensity={0.55} luminanceThreshold={0.85} luminanceSmoothing={0.3} mipmapBlur />
-            <FocusBlur stops={layout.stops} nav={nav} />
-            <ChromaticAberration offset={CA_OFFSET} radialModulation modulationOffset={0.35} />
-            <ToneMapping mode={ToneMappingMode.AGX} />
-            <Noise premultiply blendFunction={BlendFunction.ADD} opacity={0.35} />
-            <Vignette eskil={false} offset={0.2} darkness={0.75} />
-          </EffectComposer>
-        </Suspense>
-      </Canvas>
+      {quality && (
+        <Canvas
+          dpr={quality === 'high' ? [1, 2] : [1, 1.5]}
+          gl={{ antialias: false, powerPreference: 'high-performance' }}
+          camera={{ fov: 60, near: 0.1, far: 100, position: [0, 0, CAMERA_START_Z] }}
+          className="absolute inset-0 z-10"
+          onPointerMissed={() => {
+            if (!nav.current.dragging && nav.current.focused !== null) setFocus(null);
+          }}
+        >
+          <Suspense fallback={null}>
+            <Scene
+              layout={layout}
+              nav={nav}
+              focused={focused}
+              quality={quality}
+              onDecline={handleDecline}
+              onSelect={handleSelect}
+              onStopChange={setStop}
+              onUserMove={handleUserMove}
+              onAnyHover={setAnyHovered}
+              progressDot={progressDot}
+            />
+            {quality === 'high' ? (
+              <EffectComposer key="high" multisampling={4}>
+                <Bloom intensity={0.55} luminanceThreshold={0.85} luminanceSmoothing={0.3} mipmapBlur />
+                <FocusBlur stops={layout.stops} nav={nav} />
+                <ChromaticAberration offset={CA_OFFSET} radialModulation modulationOffset={0.35} />
+                <ToneMapping mode={ToneMappingMode.AGX} />
+                <Noise premultiply blendFunction={BlendFunction.ADD} opacity={0.35} />
+                <Vignette eskil={false} offset={0.2} darkness={0.75} />
+              </EffectComposer>
+            ) : (
+              <EffectComposer key="low" multisampling={0}>
+                <Bloom intensity={0.45} luminanceThreshold={0.85} luminanceSmoothing={0.3} mipmapBlur />
+                <ToneMapping mode={ToneMappingMode.AGX} />
+                <Noise premultiply blendFunction={BlendFunction.ADD} opacity={0.3} />
+                <Vignette eskil={false} offset={0.2} darkness={0.75} />
+              </EffectComposer>
+            )}
+          </Suspense>
+        </Canvas>
+      )}
     </div>
   );
 }
