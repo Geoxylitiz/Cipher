@@ -3,6 +3,8 @@
 @theme {
   --color-background: #0a0a0a;
   --color-foreground: #f5f5f2;
+  --font-serif: var(--font-display), Georgia, "Times New Roman", serif;
+  --font-mono: var(--font-code), ui-monospace, Menlo, Consolas, monospace;
 }
 
 @layer base {
@@ -10,5 +12,18 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: Arial, Helvetica, sans-serif;
+  }
+
+  @keyframes cipher-eq {
+    from { height: 3px; }
+    to { height: 12px; }
+  }
+
+  /* The custom cursor replaces the system one on mouse/trackpad devices */
+  @media (pointer: fine) {
+    html.has-custom-cursor,
+    html.has-custom-cursor * {
+      cursor: none !important;
+    }
   }
 }

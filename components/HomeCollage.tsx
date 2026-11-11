@@ -1,7 +1,7 @@
 'use client';
 import { Suspense, useMemo, useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { Html, Preload, useTexture } from '@react-three/drei';
+import { Preload, useTexture } from '@react-three/drei';
 import {
   EffectComposer,
   Bloom,
@@ -13,10 +13,11 @@ import {
 } from '@react-three/postprocessing';
 import { BlendFunction, ToneMappingMode, type DepthOfFieldEffect } from 'postprocessing';
 import * as THREE from 'three';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
-import { worksData, homeTilesData } from '@/data/works';
+import { ROOMS, galleryWorks } from '@/data/gallery';
+import { canvasFamily, useFontsReady, SERIF_STACK, MONO_STACK } from '@/lib/fonts';
+import { isIntroDone, setCursorLabel, RETURN_STOP_KEY } from '@/lib/ui-events';
 import Floor from './floor';
 
 /* ------------------------------------------------------------------ */
@@ -49,16 +50,6 @@ const HERO_Y = EYE_LEVEL + 0.4;
 
 const CA_OFFSET = new THREE.Vector2(0.0007, 0.0005);
 const DOF_TARGET: [number, number, number] = [0, 0, 0];
-
-/* ------------------------------------------------------------------ */
-/*  Rooms — the collection is hung by discipline                       */
-/* ------------------------------------------------------------------ */
-const ROOMS = [
-  { numeral: 'I', name: 'Production', category: 'Production', light: '#ffe2b8' },
-  { numeral: 'II', name: 'Direction', category: 'Direction', light: '#e6ecff' },
-  { numeral: 'III', name: 'Creative', category: 'Creative', light: '#ffdcc8' },
-] as const;
-const HERO_SLUG = 'the-dazzling';
 
 /* ------------------------------------------------------------------ */
 /*  Spotlight rig, in the artwork's local space (+z faces the room)    */
@@ -147,11 +138,6 @@ type GalleryLayout = {
   zBack: number;
 };
 
-function imageFor(id: string) {
-  const n = parseInt(id, 10);
-  return (homeTilesData.find((t) => t.id === n) ?? homeTilesData[0]).src;
-}
-
 function layoutGallery(): GalleryLayout {
   const works: GalleryWork[] = [];
   const partitions: GalleryLayout['partitions'] = [];
@@ -161,7 +147,7 @@ function layoutGallery(): GalleryLayout {
 
   ROOMS.forEach((room, r) => {
     partitions.push({ z, room: r });
-    const items = worksData.filter((w) => w.category === room.category && w.slug !== HERO_SLUG);
+    const items = galleryWorks.filter((w) => w.room === r && !w.hero);
     const roomStart = z;
     items.forEach((w, j) => {
       const side = wallCount++ % 2 === 0 ? -1 : 1;
@@ -170,7 +156,7 @@ function layoutGallery(): GalleryLayout {
         slug: w.slug,
         title: w.title,
         category: w.category,
-        src: imageFor(w.id),
+        src: w.src,
         room: r,
         position: [side * ART_X, EYE_LEVEL, roomStart - ROOM_PAD - j * RING_SPACING],
         // Left wall faces +x, right wall faces -x
@@ -188,23 +174,22 @@ function layoutGallery(): GalleryLayout {
   });
 
   // Closing piece, centred on the end wall of the last room
-  const hero = worksData.find((w) => w.slug === HERO_SLUG)!;
-  const lastRoom = ROOMS.length - 1;
+  const hero = galleryWorks.find((w) => w.hero)!;
   const zBack = z - 3;
   works.push({
     index: works.length,
     slug: hero.slug,
     title: hero.title,
     category: hero.category,
-    src: imageFor(hero.id),
-    room: lastRoom,
+    src: hero.src,
+    room: hero.room,
     position: [0, HERO_Y, zBack + 0.1],
     rotationY: 0,
     side: 0,
     hero: true,
     scale: HERO_SCALE,
     spot: HERO_SPOT,
-    light: ROOMS[lastRoom].light,
+    light: ROOMS[hero.room].light,
   });
 
   const stops: Stop[] = [
@@ -250,6 +235,7 @@ type NavState = {
   focused: number | null;  // index of the work in close-up
   lastInput: number;
   dragging: boolean;
+  jump: boolean;           // place the camera instantly (returning from a project)
 };
 
 /* ------------------------------------------------------------------ */
@@ -330,6 +316,7 @@ function Pilaster({ x, z, height, wallTexture, wallBump }: {
 }
 
 function useRoomTitleTexture(numeral: string, name: string) {
+  const fontsReady = useFontsReady();
   return useMemo(() => {
     if (typeof document === 'undefined') return null;
     const w = 1024, h = 256;
@@ -340,16 +327,16 @@ function useRoomTitleTexture(numeral: string, name: string) {
     ctx.clearRect(0, 0, w, h);
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(236,230,220,0.55)';
-    ctx.font = '500 30px ui-monospace, Menlo, Consolas, monospace';
+    ctx.font = `500 30px ${canvasFamily('--font-code', 'ui-monospace, Menlo, Consolas, monospace')}`;
     ctx.fillText(`ROOM ${numeral}`.split('').join(' '), w / 2, 70);
     ctx.fillStyle = 'rgba(244,238,228,0.92)';
-    ctx.font = 'italic 112px Georgia, "Times New Roman", serif';
+    ctx.font = `italic 124px ${canvasFamily('--font-display', 'Georgia, serif')}`;
     ctx.fillText(name, w / 2, 190);
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
     return tex;
-  }, [numeral, name]);
+  }, [numeral, name, fontsReady]);
 }
 
 function Partition({ z, room, wallTexture, wallBump }: {
@@ -892,6 +879,7 @@ function FloorPool({ y, z, width, color, intensity }: {
 /*  Wall label — small printed card beside each work                   */
 /* ------------------------------------------------------------------ */
 function useLabelTexture(index: number, title: string, category: string) {
+  const fontsReady = useFontsReady();
   return useMemo(() => {
     if (typeof document === 'undefined') return null;
     const w = 512, h = 320;
@@ -903,11 +891,11 @@ function useLabelTexture(index: number, title: string, category: string) {
     ctx.fillRect(0, 0, w, h);
 
     ctx.fillStyle = '#1b1a18';
-    ctx.font = '500 26px ui-monospace, Menlo, Consolas, monospace';
+    ctx.font = `500 26px ${canvasFamily('--font-code', 'ui-monospace, Menlo, Consolas, monospace')}`;
     ctx.fillText(`No. ${String(index + 1).padStart(2, '0')}`, 36, 62);
 
     // Title, wrapped to two lines max
-    ctx.font = 'italic 40px Georgia, "Times New Roman", serif';
+    ctx.font = `italic 46px ${canvasFamily('--font-display', 'Georgia, serif')}`;
     const words = title.split(' ');
     const lines: string[] = [];
     let line = '';
@@ -924,14 +912,14 @@ function useLabelTexture(index: number, title: string, category: string) {
     lines.slice(0, 2).forEach((l, i) => ctx.fillText(l, 36, 136 + i * 48));
 
     ctx.fillStyle = '#6b665f';
-    ctx.font = '24px ui-sans-serif, system-ui, sans-serif';
+    ctx.font = `22px ${canvasFamily('--font-code', 'ui-monospace, monospace')}`;
     ctx.fillText(`${category} · Cipher Studio`, 36, h - 40);
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
     return tex;
-  }, [index, title, category]);
+  }, [index, title, category, fontsReady]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -986,17 +974,24 @@ function GalleryPanel({ work, focused, anyFocused, onSelect, onHoverChange }: {
     }
   });
 
+  // The custom cursor reads "View", or "Open" once the work is in close-up
+  useEffect(() => {
+    if (hovered) setCursorLabel(focused ? 'Open' : 'View');
+  }, [hovered, focused]);
+  useEffect(() => () => setCursorLabel(null), []);
+
   const handleOver = useCallback((e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
     setHovered(true);
     onHoverChange(true);
-    document.body.style.cursor = 'pointer';
+    document.body.style.cursor = 'pointer'; // fallback when the custom cursor is off (touch)
   }, [onHoverChange]);
 
   const handleOut = useCallback((e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
     setHovered(false);
     onHoverChange(false);
+    setCursorLabel(null);
     document.body.style.cursor = 'auto';
   }, [onHoverChange]);
 
@@ -1060,23 +1055,6 @@ function GalleryPanel({ work, focused, anyFocused, onSelect, onHoverChange }: {
         color={work.light}
         intensity={lightLevel}
       />
-
-      {hovered && !focused && (
-        <Html center distanceFactor={8} position={[0, -outerH / 2 - 0.3, 0.05]} style={{ pointerEvents: 'none' }}>
-          <div
-            style={{
-              fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
-              fontSize: 11,
-              letterSpacing: '0.18em',
-              textTransform: 'uppercase',
-              color: 'rgba(255,255,255,0.85)',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            View →
-          </div>
-        </Html>
-      )}
     </group>
   );
 }
@@ -1099,8 +1077,14 @@ function CameraRig({ stops, nav, onStopChange, onUserMove, progressDot }: {
   const mouse = useRef({ x: 0, y: 0 });
   const lastY = useRef(0);
   const focusAmt = useRef(0);
+  const introAmt = useRef(0);
   const lastFocused = useRef<number | null>(null);
   const reportedStop = useRef(-1);
+
+  // Returning visitors skip the entrance push-in
+  useEffect(() => {
+    if (isIntroDone()) introAmt.current = 1;
+  }, []);
   const scratch = useMemo(
     () => ({
       pos: new THREE.Vector3(),
@@ -1188,6 +1172,15 @@ function CameraRig({ stops, nav, onStopChange, onUserMove, progressDot }: {
     const parked = Math.pow(Math.abs(2 * f - 1), 1.5);
     look.lerpVectors(forward, stopLook, parked);
 
+    // Entrance: start further back and higher, then push in as the intro opens
+    if (isIntroDone()) introAmt.current = THREE.MathUtils.damp(introAmt.current, 1, 0.85, delta);
+    const back = 1 - introAmt.current;
+    if (back > 0.0005) {
+      pos.z += back * 7;
+      pos.y += back * 0.9;
+      look.y += back * 0.4;
+    }
+
     // Close-up on the selected work
     if (n.focused !== null) lastFocused.current = n.focused;
     focusAmt.current = THREE.MathUtils.damp(focusAmt.current, n.focused !== null ? 1 : 0, 2.6, delta);
@@ -1229,10 +1222,18 @@ function CameraRig({ stops, nav, onStopChange, onUserMove, progressDot }: {
     look.addScaledVector(up, -mouse.current.y * 0.5 * freedom);
 
     const k = 1 - Math.exp(-6 * delta);
-    camera.position.lerp(pos, k);
-    m.lookAt(camera.position, look, up);
-    q.setFromRotationMatrix(m);
-    camera.quaternion.slerp(q, k);
+    if (n.jump) {
+      // Returning from a project: appear at the remembered stop, no glide
+      camera.position.copy(pos);
+      m.lookAt(pos, look, up);
+      camera.quaternion.setFromRotationMatrix(m);
+      n.jump = false;
+    } else {
+      camera.position.lerp(pos, k);
+      m.lookAt(camera.position, look, up);
+      q.setFromRotationMatrix(m);
+      camera.quaternion.slerp(q, k);
+    }
 
     if (progressDot.current) {
       progressDot.current.style.top = `${(last > 0 ? n.s / last : 0) * 100}%`;
@@ -1361,19 +1362,49 @@ function Scene({ layout, nav, focused, onSelect, onStopChange, onUserMove, onAny
 /* ------------------------------------------------------------------ */
 /*  Top-level export                                                   */
 /* ------------------------------------------------------------------ */
-const SERIF = '"Instrument Serif", "Cormorant Garamond", Georgia, "Times New Roman", serif';
-const MONO = 'ui-monospace, Menlo, Consolas, monospace';
+const SERIF = SERIF_STACK;
+const MONO = MONO_STACK;
 
 export default function HomeCollage() {
   const router = useRouter();
   const layout = useMemo(() => layoutGallery(), []);
-  const nav = useRef<NavState>({ s: 0, target: 0, focused: null, lastInput: 0, dragging: false });
+  const nav = useRef<NavState>({ s: 0, target: 0, focused: null, lastInput: 0, dragging: false, jump: false });
   const progressDot = useRef<HTMLDivElement>(null);
   const [stop, setStop] = useState(0);
   const [focused, setFocused] = useState<number | null>(null);
   const [hasInteracted, setHasInteracted] = useState(false);
   const [, setAnyHovered] = useState(false);
   const [isDesktop, setIsDesktop] = useState(true);
+  const [leavingTo, setLeavingTo] = useState<string | null>(null);
+
+  // Coming back from a project page: reappear in front of the work you left
+  useEffect(() => {
+    let saved: string | null = null;
+    try {
+      saved = sessionStorage.getItem(RETURN_STOP_KEY);
+      sessionStorage.removeItem(RETURN_STOP_KEY);
+    } catch {
+      /* storage unavailable — start at the entrance */
+    }
+    const s = saved !== null ? parseInt(saved, 10) : NaN;
+    if (Number.isFinite(s) && s > 0 && s <= layout.stops.length - 1) {
+      Object.assign(nav.current, { s, target: s, jump: true });
+      setHasInteracted(true);
+    }
+  }, [layout.stops.length]);
+
+  /** Fade to black, then open the project page (remembering where we were). */
+  const openProject = useCallback((index: number) => {
+    const slug = layout.works[index].slug;
+    try {
+      sessionStorage.setItem(RETURN_STOP_KEY, String(index + 1));
+    } catch {
+      /* ignore */
+    }
+    setCursorLabel(null);
+    setLeavingTo(slug);
+    router.prefetch(`/works/${slug}`);
+  }, [layout.works, router]);
 
   useEffect(() => {
     const mq = window.matchMedia(`(min-width: ${CAPTION_BREAKPOINT}px)`);
@@ -1403,12 +1434,12 @@ export default function HomeCollage() {
 
   const handleSelect = useCallback((index: number) => {
     if (nav.current.focused === index) {
-      router.push(`/works/${layout.works[index].slug}`);
+      openProject(index);
       return;
     }
     goTo(index + 1);
     setFocus(index);
-  }, [goTo, layout.works, router, setFocus]);
+  }, [goTo, openProject, setFocus]);
 
   const handleUserMove = useCallback(() => {
     setHasInteracted(true);
@@ -1418,6 +1449,8 @@ export default function HomeCollage() {
   // Keyboard: arrows step between works, Enter opens/focuses, Escape steps back
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Let buttons and links handle their own Enter/Space
+      if ((e.target as Element | null)?.closest?.('a, button, input, textarea')) return;
       const n = nav.current;
       const current = Math.round(n.target);
       if (['ArrowDown', 'ArrowRight', 'PageDown', ' '].includes(e.key)) {
@@ -1555,13 +1588,19 @@ export default function HomeCollage() {
               <dt className="text-white/40 uppercase text-[11px] tracking-[0.2em]">Studio</dt>
               <dd className="text-white/85">Cipher Studio</dd>
             </dl>
-            <Link
+            <a
               href={`/works/${focusedWork.slug}`}
-              className="mt-10 inline-flex items-center justify-between border border-white/25 px-5 py-4 text-xs uppercase tracking-[0.25em] hover:bg-white hover:text-black transition-colors"
+              onClick={(e) => {
+                // Plain clicks get the fade-to-black; modified clicks open normally
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                openProject(focusedWork.index);
+              }}
+              className="mt-8 md:mt-10 inline-flex items-center justify-between border border-white/25 px-5 py-4 text-xs uppercase tracking-[0.25em] hover:bg-white hover:text-black transition-colors"
               style={{ fontFamily: MONO }}
             >
               Open project <span aria-hidden>→</span>
-            </Link>
+            </a>
             <button
               type="button"
               onClick={() => setFocus(null)}
@@ -1571,6 +1610,20 @@ export default function HomeCollage() {
               Back to the room (Esc)
             </button>
           </motion.aside>
+        )}
+      </AnimatePresence>
+
+      {/* Fade to black before opening a project */}
+      <AnimatePresence>
+        {leavingTo && (
+          <motion.div
+            key="leaving"
+            className="absolute inset-0 z-[60] bg-[#070707]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.7, ease: [0.76, 0, 0.24, 1] }}
+            onAnimationComplete={() => router.push(`/works/${leavingTo}`)}
+          />
         )}
       </AnimatePresence>
 
