@@ -1,6 +1,6 @@
 {
-  "name": "Cipher Studio Clone",
-  "description": "A pixel-accurate clone of the cipher.tv creative production studio website.",
+  "name": "Meowhlock Studio",
+  "description": "Meowhlock Studio — a 3D gallery of selected work.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

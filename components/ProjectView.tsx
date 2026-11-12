@@ -94,7 +94,7 @@ export default function ProjectView({ entry, next }: { entry: GalleryEntry; next
           <dt className="text-white/40 uppercase text-[11px] tracking-[0.2em]">Room</dt>
           <dd className="text-white/85">{room.numeral} — {room.name}</dd>
           <dt className="text-white/40 uppercase text-[11px] tracking-[0.2em]">Studio</dt>
-          <dd className="text-white/85">Cipher Studio</dd>
+          <dd className="text-white/85">Meowhlock Studio</dd>
         </dl>
         <p
           className="md:col-span-6 md:col-start-7 text-2xl md:text-3xl leading-snug text-white/70"

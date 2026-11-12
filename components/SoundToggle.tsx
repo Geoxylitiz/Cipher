@@ -99,7 +99,7 @@ export default function SoundToggle() {
             className="w-[2px] bg-current"
             style={{
               height: on ? undefined : 3,
-              animation: on ? `cipher-eq 1.${i + 1}s ease-in-out ${i * 0.15}s infinite alternate` : 'none',
+              animation: on ? `meow-eq 1.${i + 1}s ease-in-out ${i * 0.15}s infinite alternate` : 'none',
             }}
           />
         ))}

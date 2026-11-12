@@ -22,17 +22,17 @@ const code = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Cipher Studio',
-  description: 'For culture and its counter',
+  title: 'Meowhlock Studio',
+  description: 'Curious work, nine lives deep.',
   openGraph: {
-    title: 'Cipher Studio',
-    description: 'For culture and its counter',
+    title: 'Meowhlock Studio',
+    description: 'Curious work, nine lives deep.',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Cipher Studio',
-    description: 'For culture and its counter',
+    title: 'Meowhlock Studio',
+    description: 'Curious work, nine lives deep.',
   },
 };
 

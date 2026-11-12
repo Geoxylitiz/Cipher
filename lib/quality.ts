@@ -13,7 +13,7 @@
  */
 export type Quality = 'high' | 'low';
 
-const STORAGE_KEY = 'cipher:quality';
+const STORAGE_KEY = 'meowhlock:quality';
 
 export function detectQuality(): Quality {
   if (typeof window === 'undefined') return 'high';

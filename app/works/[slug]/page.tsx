@@ -10,7 +10,7 @@ export function generateStaticParams() {
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
   const entry = getGalleryEntry(slug);
-  return { title: entry ? `${entry.title} — Cipher Studio` : 'Cipher Studio' };
+  return { title: entry ? `${entry.title} — Meowhlock Studio` : 'Meowhlock Studio' };
 }
 
 export default async function WorkSinglePage({ params }: { params: Promise<{ slug: string }> }) {

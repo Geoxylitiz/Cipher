@@ -6,14 +6,14 @@
  */
 
 /** sessionStorage key: the gallery stop to return to after a project page */
-export const RETURN_STOP_KEY = 'cipher:return-stop';
+export const RETURN_STOP_KEY = 'meowhlock:return-stop';
 
-const CURSOR_EVENT = 'cipher:cursor';
-const INTRO_EVENT = 'cipher:intro-done';
+const CURSOR_EVENT = 'meowhlock:cursor';
+const INTRO_EVENT = 'meowhlock:intro-done';
 
 declare global {
   interface Window {
-    __cipherIntroDone?: boolean;
+    __meowhlockIntroDone?: boolean;
   }
 }
 
@@ -31,13 +31,13 @@ export function onCursorLabel(cb: (label: string | null) => void) {
 
 /** The intro overlay has started opening: the scene may begin its entrance. */
 export function markIntroDone() {
-  if (typeof window === 'undefined' || window.__cipherIntroDone) return;
-  window.__cipherIntroDone = true;
+  if (typeof window === 'undefined' || window.__meowhlockIntroDone) return;
+  window.__meowhlockIntroDone = true;
   window.dispatchEvent(new Event(INTRO_EVENT));
 }
 
 export function isIntroDone() {
-  return typeof window !== 'undefined' && !!window.__cipherIntroDone;
+  return typeof window !== 'undefined' && !!window.__meowhlockIntroDone;
 }
 
 export function onIntroDone(cb: () => void) {

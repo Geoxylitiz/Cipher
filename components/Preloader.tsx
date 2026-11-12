@@ -7,7 +7,7 @@ import { useProgress } from '@react-three/drei';
 import { markIntroDone } from '@/lib/ui-events';
 import { MONO_STACK, SERIF_STACK } from '@/lib/fonts';
 
-const TITLE = 'Cipher Studio';
+const TITLE = 'Meowhlock Studio';
 const MIN_INTRO_MS = 2200;   // let the title finish revealing before we open
 const MAX_WAIT_MS = 15000;   // never trap the visitor behind the loader
 const EASE = [0.76, 0, 0.24, 1] as const;
@@ -119,7 +119,7 @@ export default function Preloader() {
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.6, delay: 0.6 }}
               >
-                <span>For culture and its counter</span>
+                <span>Curious work, nine lives deep.</span>
                 <span className="tabular-nums">Loading {String(pct).padStart(3, '0')}</span>
               </motion.div>
 

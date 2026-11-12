@@ -14,7 +14,7 @@
     font-family: Arial, Helvetica, sans-serif;
   }
 
-  @keyframes cipher-eq {
+  @keyframes meow-eq {
     from { height: 3px; }
     to { height: 12px; }
   }

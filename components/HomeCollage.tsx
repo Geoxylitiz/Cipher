@@ -738,7 +738,7 @@ function useLabelTexture(index: number, title: string, category: string) {
 
     ctx.fillStyle = '#6b665f';
     ctx.font = `22px ${canvasFamily('--font-code', 'ui-monospace, monospace')}`;
-    ctx.fillText(`${category} · Cipher Studio`, 36, h - 40);
+    ctx.fillText(`${category} · Meowhlock Studio`, 36, h - 40);
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -1382,7 +1382,7 @@ export default function HomeCollage() {
             className="text-[10px] md:text-[11px] uppercase tracking-[0.32em] text-white/55"
             style={{ fontFamily: MONO }}
           >
-            {currentStop.workIndex === null ? 'Cipher Studio — The Collection' : `Room ${room.numeral} — ${room.name}`}
+            {currentStop.workIndex === null ? 'Meowhlock Studio — The Collection' : `Room ${room.numeral} — ${room.name}`}
           </motion.div>
         </AnimatePresence>
         <div className="flex items-end gap-3 mt-2">
@@ -1477,7 +1477,7 @@ export default function HomeCollage() {
               <dt className="text-white/40 uppercase text-[11px] tracking-[0.2em]">Discipline</dt>
               <dd className="text-white/85">{focusedWork.category}</dd>
               <dt className="text-white/40 uppercase text-[11px] tracking-[0.2em]">Studio</dt>
-              <dd className="text-white/85">Cipher Studio</dd>
+              <dd className="text-white/85">Meowhlock Studio</dd>
             </dl>
             <a
               href={`/works/${focusedWork.slug}`}
