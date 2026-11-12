@@ -8,7 +8,7 @@ export const ROOMS = [
 ] as const;
 
 /** Closing piece, hung larger on the end wall of the last room. */
-export const HERO_SLUG = 'the-dazzling';
+export const HERO_SLUG = 'nine-lives';
 
 export type GalleryEntry = {
   number: number; // 1-based position in the walk-through
