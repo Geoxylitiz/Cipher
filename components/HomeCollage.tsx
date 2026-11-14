@@ -1,7 +1,8 @@
 'use client';
 import { Suspense, useMemo, useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { PerformanceMonitor, Preload, useTexture } from '@react-three/drei';
+import { PerformanceMonitor, Preload } from '@react-three/drei';
+import { useArtworkTexture } from '@/lib/artwork-texture';
 import {
   EffectComposer,
   Bloom,
@@ -763,7 +764,7 @@ function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange 
   const [hovered, setHovered] = useState(false);
   const lightLevel = useRef(1);
 
-  const texture = useTexture(work.src);
+  const texture = useArtworkTexture(work.src, work.title);
   const labelTexture = useLabelTexture(work.index, work.title, work.category);
 
   // Crop the image to the panel's aspect ratio ("object-fit: cover")
