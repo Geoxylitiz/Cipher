@@ -1,11 +1,23 @@
 import { worksData, homeTilesData } from './works';
 
-/** The collection is hung by discipline, one room each. */
+/**
+ * The collection is hung by discipline, one room each. The walk goes from
+ * dark to light: deep green, then oxblood, then a bright final hall.
+ *
+ * light   colour of the spotlights and skylight
+ * wall    painted wall colour
+ * ceiling ceiling colour
+ * wash    how strongly the walls glow from the cove/skylight (1 = as painted)
+ * haze    visibility of the light beams (bright rooms show less haze)
+ */
 export const ROOMS = [
-  { numeral: 'I', name: 'Production', category: 'Production', light: '#ffe2b8' },
-  { numeral: 'II', name: 'Direction', category: 'Direction', light: '#e6ecff' },
-  { numeral: 'III', name: 'Creative', category: 'Creative', light: '#ffdcc8' },
+  { numeral: 'I', name: 'Production', category: 'Production', light: '#ffe2b8', wall: '#34503f', ceiling: '#232623', wash: 1.15, haze: 1 },
+  { numeral: 'II', name: 'Direction', category: 'Direction', light: '#ffe6cc', wall: '#5c2224', ceiling: '#2a2221', wash: 1.05, haze: 1 },
+  { numeral: 'III', name: 'Creative', category: 'Creative', light: '#fff3e2', wall: '#e8e3d9', ceiling: '#d2cdc3', wash: 0.85, haze: 0.3 },
 ] as const;
+
+/** The space in front of the first doorway. */
+export const LOBBY = { wall: '#2b2a28', ceiling: '#191919', wash: 0.7 } as const;
 
 /** Closing piece, hung larger on the end wall of the last room. */
 export const HERO_SLUG = 'nine-lives';

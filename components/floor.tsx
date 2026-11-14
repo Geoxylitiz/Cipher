@@ -19,7 +19,7 @@ export default function Floor({
   zBack = -40,
   width = 14,
   y = -1.8,
-  color = '#6a655e',
+  color = '#8f8a81',
 }: {
   zFront?: number;
   zBack?: number;

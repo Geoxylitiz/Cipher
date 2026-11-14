@@ -16,7 +16,7 @@ import { BlendFunction, ToneMappingMode, type DepthOfFieldEffect } from 'postpro
 import * as THREE from 'three';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
-import { ROOMS, galleryWorks } from '@/data/gallery';
+import { ROOMS, LOBBY, galleryWorks } from '@/data/gallery';
 import { canvasFamily, useFontsReady, SERIF_STACK, MONO_STACK } from '@/lib/fonts';
 import { isIntroDone, onIntroDone, setCursorLabel, RETURN_STOP_KEY } from '@/lib/ui-events';
 import { detectQuality, rememberLowQuality, type Quality } from '@/lib/quality';
@@ -121,6 +121,18 @@ type GalleryWork = {
   scale: number;
   spot: SpotRig;
   light: string;
+  haze: number;      // how visible this room's light beams are
+};
+
+type Paint = { wall: string; ceiling: string; wash: number };
+
+/** One stretch of the building between two doorways (room -1 is the lobby). */
+type RoomSpan = {
+  room: number;
+  zStart: number;
+  zEnd: number;
+  paint: Paint;
+  light: string;
 };
 
 type Stop = {
@@ -136,6 +148,7 @@ type GalleryLayout = {
   works: GalleryWork[];
   stops: Stop[];
   partitions: { z: number; room: number }[];
+  rooms: RoomSpan[];
   benches: number[];
   zFront: number;
   zBack: number;
@@ -169,6 +182,7 @@ function layoutGallery(): GalleryLayout {
         scale: 1,
         spot: WALL_SPOT,
         light: room.light,
+        haze: room.haze,
       });
     });
     const lastZ = roomStart - ROOM_PAD - Math.max(0, items.length - 1) * RING_SPACING;
@@ -193,6 +207,7 @@ function layoutGallery(): GalleryLayout {
     scale: HERO_SCALE,
     spot: HERO_SPOT,
     light: ROOMS[hero.room].light,
+    haze: ROOMS[hero.room].haze,
   });
 
   const stops: Stop[] = [
@@ -228,7 +243,19 @@ function layoutGallery(): GalleryLayout {
     }),
   ];
 
-  return { works, stops, partitions, benches, zFront: CAMERA_START_Z + 8, zBack };
+  const zFront = CAMERA_START_Z + 8;
+  const rooms: RoomSpan[] = [
+    { room: -1, zStart: zFront, zEnd: ENTRY_Z, paint: LOBBY, light: ROOMS[0].light },
+    ...ROOMS.map((room, r): RoomSpan => ({
+      room: r,
+      zStart: partitions[r].z,
+      zEnd: r + 1 < partitions.length ? partitions[r + 1].z : zBack,
+      paint: room,
+      light: room.light,
+    })),
+  ];
+
+  return { works, stops, partitions, rooms, benches, zFront, zBack };
 }
 
 /* Shared navigation state between the DOM overlay and the camera rig */
@@ -243,14 +270,57 @@ type NavState = {
 
 /* Scanned plaster surfaces (see lib/surfaces.ts) */
 // Walls are painted, not raw plaster: only the scan's relief (normal + roughness)
-// is used, so the spotlights rake across real surface texture on clean paint.
-// (Before Phase 4 the generated wall texture was set after the material compiled
-// and never applied, so walls rendered plain white; these colours keep that look.)
-const WALL_TINT = '#d9d3c9';
-const PILASTER_TINT = '#77716a';
-const CEILING_TINT = '#1a1a1d';
+// is used, so light rakes across real surface texture on clean paint.
 const NORMAL_SCALE = new THREE.Vector2(0.5, 0.5);
 const relief = (s: Surface) => ({ normalMap: s.normalMap, roughnessMap: s.roughnessMap });
+
+const SKY_W = 3.4;        // width of the ceiling lay-light in each room
+const BEAM_DEPTH = 0.2;   // ceiling beams
+const TRACK_Y = CEILING_Y - BEAM_DEPTH - 0.03;
+
+/**
+ * Vertical falloff for the wall wash: brightest under the cove at the top,
+ * dimmer toward the floor. Used as an emissive map, so the paint colour
+ * reads without paying for extra real-time lights.
+ */
+let washTexture: THREE.CanvasTexture | null = null;
+function getWashTexture() {
+  if (washTexture || typeof document === 'undefined') return washTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, 'rgb(255,255,255)');
+  g.addColorStop(0.4, 'rgb(170,170,170)');
+  g.addColorStop(1, 'rgb(105,105,105)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 4, 256);
+  washTexture = new THREE.CanvasTexture(canvas);
+  return washTexture;
+}
+
+/** Painted plaster: the room colour, lit softly from above. */
+function PaintMaterial({ color, wash, surface, graded = true }: {
+  color: string;
+  wash: number;
+  surface: Surface;
+  graded?: boolean; // false for surfaces without a vertical direction (ceilings)
+}) {
+  const washMap = useMemo(() => getWashTexture(), []);
+  return (
+    <meshStandardMaterial
+      color={color}
+      roughness={1}
+      metalness={0}
+      {...relief(surface)}
+      normalScale={NORMAL_SCALE}
+      emissive={color}
+      emissiveMap={graded ? washMap ?? undefined : undefined}
+      emissiveIntensity={wash}
+    />
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Museum Architecture — walls, ceiling, pilasters, track, benches    */
@@ -260,7 +330,7 @@ function Bench({ z }: { z: number }) {
     <group position={[0, -2, z]}>
       <mesh position={[0, 0.45, 0]}>
         <boxGeometry args={[2.5, 0.08, 0.7]} />
-        <meshStandardMaterial color="#2a221c" roughness={0.6} metalness={0.1} />
+        <meshStandardMaterial color="#3a2e25" roughness={0.6} metalness={0.1} />
       </mesh>
       <mesh position={[-0.9, 0.2, 0]}>
         <boxGeometry args={[0.4, 0.4, 0.5]} />
@@ -274,9 +344,10 @@ function Bench({ z }: { z: number }) {
   );
 }
 
-function Pilaster({ x, z, height, surface }: {
+function Pilaster({ x, z, height, surface, paint }: {
   x: number; z: number; height: number;
   surface: Surface;
+  paint: Paint;
 }) {
   const baseH = 0.4;
   const abacusH = 0.1;
@@ -299,27 +370,17 @@ function Pilaster({ x, z, height, surface }: {
         <boxGeometry args={[baseW, baseH, baseD]} />
         <meshStandardMaterial color="#141416" roughness={0.55} metalness={0.15} />
       </mesh>
-      <mesh position={[0, y0 + baseH + 0.02, 0]}>
-        <boxGeometry args={[baseW - 0.06, 0.05, baseD - 0.06]} />
-        <meshStandardMaterial color="#050505" roughness={0.4} metalness={0.25} />
-      </mesh>
       <mesh position={[0, shaftY, 0]}>
         <boxGeometry args={[shaftW, shaftH, shaftD]} />
-        <meshStandardMaterial color={PILASTER_TINT} roughness={1} metalness={0} {...relief(surface)} normalScale={NORMAL_SCALE} />
+        <PaintMaterial color={paint.wall} wash={paint.wash * 0.85} surface={surface} />
       </mesh>
-      {[-0.09, -0.03, 0.03, 0.09].map((offset, i) => (
-        <mesh key={i} position={[offset, shaftY, shaftD / 2 - 0.005]}>
-          <boxGeometry args={[0.018, shaftH * 0.92, 0.015]} />
-          <meshStandardMaterial color="#050505" roughness={0.9} />
-        </mesh>
-      ))}
       <mesh position={[0, capY, 0]}>
         <boxGeometry args={[capW, capH, capD]} />
-        <meshStandardMaterial color="#2a2a2e" roughness={0.6} metalness={0.15} />
+        <PaintMaterial color={paint.wall} wash={paint.wash} surface={surface} graded={false} />
       </mesh>
       <mesh position={[0, abacusY, 0]}>
         <boxGeometry args={[abacusW, abacusH, abacusD]} />
-        <meshStandardMaterial color="#050505" roughness={0.4} metalness={0.25} />
+        <meshStandardMaterial color="#141416" roughness={0.4} metalness={0.25} />
       </mesh>
     </group>
   );
@@ -336,59 +397,68 @@ function useRoomTitleTexture(numeral: string, name: string) {
     const ctx = canvas.getContext('2d')!;
     ctx.clearRect(0, 0, w, h);
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(236,230,220,0.55)';
+    ctx.fillStyle = 'rgba(236,230,220,0.6)';
     ctx.font = `500 30px ${canvasFamily('--font-code', 'ui-monospace, Menlo, Consolas, monospace')}`;
     ctx.fillText(`ROOM ${numeral}`.split('').join(' '), w / 2, 70);
-    ctx.fillStyle = 'rgba(244,238,228,0.92)';
+    ctx.fillStyle = 'rgba(244,238,228,0.95)';
     ctx.font = `italic 124px ${canvasFamily('--font-display', 'Georgia, serif')}`;
     ctx.fillText(name, w / 2, 190);
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
     return tex;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numeral, name, fontsReady]);
 }
 
-function Partition({ z, room, surface }: {
+/**
+ * Wall with a doorway. It is built as two skins so each face carries the
+ * colour of the room it looks into.
+ */
+function Partition({ z, room, surface, front, back }: {
   z: number;
   room: number;
   surface: Surface;
+  front: Paint; // the space you are leaving
+  back: Paint;  // the room you are entering
 }) {
   const height = CEILING_Y - FLOOR_Y;
   const sideW = WALL_X - DOOR_W / 2;
   const lintelH = CEILING_Y - (FLOOR_Y + DOOR_H);
   const lintelY = FLOOR_Y + DOOR_H + lintelH / 2;
+  const half = PARTITION_T / 2;
   const title = useRoomTitleTexture(ROOMS[room].numeral, ROOMS[room].name);
-  const material = (
-    <meshStandardMaterial color={WALL_TINT} roughness={1} metalness={0} {...relief(surface)} normalScale={NORMAL_SCALE} />
-  );
 
   return (
     <group position={[0, 0, z]}>
+      {([[half / 2, front], [-half / 2, back]] as const).map(([dz, paint], i) => (
+        <group key={i} position={[0, 0, dz]}>
+          {[-1, 1].map((side) => (
+            <mesh key={side} position={[side * (DOOR_W / 2 + sideW / 2), FLOOR_Y + height / 2, 0]}>
+              <boxGeometry args={[sideW, height, half]} />
+              <PaintMaterial color={paint.wall} wash={paint.wash} surface={surface} />
+            </mesh>
+          ))}
+          <mesh position={[0, lintelY, 0]}>
+            <boxGeometry args={[DOOR_W, lintelH, half]} />
+            <PaintMaterial color={paint.wall} wash={paint.wash} surface={surface} graded={false} />
+          </mesh>
+        </group>
+      ))}
+      {/* Door lining — dark jambs and head, proud of both faces */}
       {[-1, 1].map((side) => (
-        <mesh key={side} position={[side * (DOOR_W / 2 + sideW / 2), FLOOR_Y + height / 2, 0]}>
-          <boxGeometry args={[sideW, height, PARTITION_T]} />
-          {material}
+        <mesh key={`jamb-${side}`} position={[side * (DOOR_W / 2 - 0.03), FLOOR_Y + DOOR_H / 2, 0]}>
+          <boxGeometry args={[0.06, DOOR_H, PARTITION_T + 0.08]} />
+          <meshStandardMaterial color="#0d0c0b" roughness={0.45} metalness={0.3} />
         </mesh>
       ))}
-      <mesh position={[0, lintelY, 0]}>
-        <boxGeometry args={[DOOR_W, lintelH, PARTITION_T]} />
-        {material}
-      </mesh>
-      {/* Doorway reveal — thin dark architrave */}
-      {[-1, 1].map((side) => (
-        <mesh key={`reveal-${side}`} position={[side * (DOOR_W / 2 + 0.03), FLOOR_Y + DOOR_H / 2, PARTITION_T / 2 + 0.01]}>
-          <boxGeometry args={[0.06, DOOR_H, 0.02]} />
-          <meshStandardMaterial color="#0a0a0a" roughness={0.4} metalness={0.3} />
-        </mesh>
-      ))}
-      <mesh position={[0, FLOOR_Y + DOOR_H + 0.03, PARTITION_T / 2 + 0.01]}>
-        <boxGeometry args={[DOOR_W + 0.12, 0.06, 0.02]} />
-        <meshStandardMaterial color="#0a0a0a" roughness={0.4} metalness={0.3} />
+      <mesh position={[0, FLOOR_Y + DOOR_H - 0.03, 0]}>
+        <boxGeometry args={[DOOR_W, 0.06, PARTITION_T + 0.08]} />
+        <meshStandardMaterial color="#0d0c0b" roughness={0.45} metalness={0.3} />
       </mesh>
       {/* Room title, lettered on the wall above the doorway */}
       {title && (
-        <mesh position={[0, lintelY + 0.05, PARTITION_T / 2 + 0.02]} raycast={() => null}>
+        <mesh position={[0, lintelY + 0.05, half + 0.02]} raycast={() => null}>
           <planeGeometry args={[3.6, 0.9]} />
           <meshBasicMaterial map={title} transparent depthWrite={false} />
         </mesh>
@@ -397,69 +467,153 @@ function Partition({ z, room, surface }: {
   );
 }
 
-function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
+/** Walls, ceiling, beams and lay-light for one room (or the lobby). */
+function RoomShell({ span }: { span: RoomSpan }) {
   const height = CEILING_Y - FLOOR_Y;
-  const centerZ = (layout.zFront + layout.zBack) / 2;
-  const corridorLength = layout.zFront - layout.zBack;
+  const length = span.zStart - span.zEnd;
+  const centerZ = (span.zStart + span.zEnd) / 2;
+  const { paint } = span;
+  const isRoom = span.room >= 0;
 
   // Scanned plaster (Poly Haven, CC0) — each surface gets its own tiling
-  const wall = useSurface(PLASTER_MAPS, corridorLength / 3, height / 3);
-  const endWall = useSurface(PLASTER_MAPS, (WALL_X * 2) / 3, height / 3);
-  const ceiling = useSurface(PLASTER_MAPS, (WALL_X * 2) / 4, corridorLength / 4);
-  const pilaster = useSurface(PLASTER_MAPS, 0.25, height / 3);
-  const partition = useSurface(PLASTER_MAPS, 1.6, height / 3);
+  const wall = useSurface(PLASTER_MAPS, length / 3, height / 3);
+  const ceiling = useSurface(PLASTER_MAPS, (WALL_X * 2) / 4, length / 4);
+  const beam = useSurface(PLASTER_MAPS, 2, 0.2);
+
+  const skyLen = length - 3.2;
+  const skyColor = useMemo(() => new THREE.Color(span.light).multiplyScalar(1.5), [span.light]);
+
+  // Ceiling beams, evenly spaced along the room
+  const beamZs = useMemo(() => {
+    const n = Math.max(2, Math.round(length / 3.8));
+    return Array.from({ length: n - 1 }, (_, i) => span.zStart - ((i + 1) * length) / n);
+  }, [length, span.zStart]);
+  // Glazing bars across the lay-light
+  const barZs = useMemo(() => {
+    const n = Math.max(2, Math.round(skyLen / 1.9));
+    return Array.from({ length: n + 1 }, (_, i) => centerZ + skyLen / 2 - (i * skyLen) / n);
+  }, [skyLen, centerZ]);
+
+  const beamSideW = WALL_X - SKY_W / 2 - 0.15;
 
   return (
     <group>
       {/* Ceiling */}
       <mesh position={[0, CEILING_Y, centerZ]} rotation={[Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[WALL_X * 2, corridorLength]} />
-        <meshStandardMaterial color={CEILING_TINT} roughness={1} metalness={0} {...relief(ceiling)} normalScale={NORMAL_SCALE} />
+        <planeGeometry args={[WALL_X * 2, length]} />
+        <PaintMaterial color={paint.ceiling} wash={paint.wash * 0.55} surface={ceiling} graded={false} />
       </mesh>
 
-      {/* Ceiling light tracks */}
-      {[-1, 1].map((side) => (
-        <mesh key={`track-${side}`} position={[side * TRACK_X, CEILING_Y - 0.03, centerZ]}>
-          <boxGeometry args={[0.07, 0.05, corridorLength]} />
-          <meshStandardMaterial color="#0b0b0b" metalness={0.8} roughness={0.35} />
-        </mesh>
-      ))}
+      {/* Beams — split either side of the lay-light in a room, full width in the lobby */}
+      {beamZs.map((z) =>
+        isRoom ? (
+          [-1, 1].map((side) => (
+            <mesh key={`${z}-${side}`} position={[side * (SKY_W / 2 + 0.15 + beamSideW / 2), CEILING_Y - BEAM_DEPTH / 2, z]}>
+              <boxGeometry args={[beamSideW, BEAM_DEPTH, 0.28]} />
+              <PaintMaterial color={paint.ceiling} wash={paint.wash * 0.75} surface={beam} graded={false} />
+            </mesh>
+          ))
+        ) : (
+          <mesh key={z} position={[0, CEILING_Y - BEAM_DEPTH / 2, z]}>
+            <boxGeometry args={[WALL_X * 2, BEAM_DEPTH, 0.28]} />
+            <PaintMaterial color={paint.ceiling} wash={paint.wash * 0.75} surface={beam} graded={false} />
+          </mesh>
+        )
+      )}
 
-      {/* Side walls */}
+      {/* Lay-light: a glazed strip of soft daylight down the middle of the room */}
+      {isRoom && (
+        <group position={[0, 0, centerZ]}>
+          {[-1, 1].map((side) => (
+            <mesh key={`curb-${side}`} position={[side * (SKY_W / 2 + 0.075), CEILING_Y - BEAM_DEPTH / 2, 0]}>
+              <boxGeometry args={[0.15, BEAM_DEPTH, skyLen + 0.3]} />
+              <PaintMaterial color={paint.ceiling} wash={paint.wash * 0.75} surface={beam} graded={false} />
+            </mesh>
+          ))}
+          {[-1, 1].map((end) => (
+            <mesh key={`end-${end}`} position={[0, CEILING_Y - BEAM_DEPTH / 2, end * (skyLen / 2 + 0.075)]}>
+              <boxGeometry args={[SKY_W, BEAM_DEPTH, 0.15]} />
+              <PaintMaterial color={paint.ceiling} wash={paint.wash * 0.75} surface={beam} graded={false} />
+            </mesh>
+          ))}
+          <mesh position={[0, CEILING_Y - 0.04, 0]} rotation={[Math.PI / 2, 0, 0]} raycast={() => null}>
+            <planeGeometry args={[SKY_W, skyLen]} />
+            <meshBasicMaterial color={skyColor} fog={false} />
+          </mesh>
+          <mesh position={[0, CEILING_Y - 0.1, 0]}>
+            <boxGeometry args={[0.05, 0.05, skyLen]} />
+            <meshStandardMaterial color="#1a1a1a" roughness={0.5} metalness={0.4} />
+          </mesh>
+        </group>
+      )}
+      {isRoom &&
+        barZs.map((z) => (
+          <mesh key={`bar-${z}`} position={[0, CEILING_Y - 0.1, z]}>
+            <boxGeometry args={[SKY_W, 0.05, 0.05]} />
+            <meshStandardMaterial color="#1a1a1a" roughness={0.5} metalness={0.4} />
+          </mesh>
+        ))}
+
+      {/* Light tracks, hung under the beams */}
+      {isRoom &&
+        [-1, 1].map((side) => (
+          <mesh key={`track-${side}`} position={[side * TRACK_X, TRACK_Y, centerZ]}>
+            <boxGeometry args={[0.07, 0.05, length - PARTITION_T]} />
+            <meshStandardMaterial color="#0b0b0b" metalness={0.8} roughness={0.35} />
+          </mesh>
+        ))}
+
+      {/* Side walls, with skirting and a cornice */}
       {[-1, 1].map((side) => (
-        <mesh
-          key={`wall-${side}`}
-          position={[side * WALL_X, FLOOR_Y + height / 2, centerZ]}
-          rotation={[0, -side * Math.PI / 2, 0]}
-        >
-          <planeGeometry args={[corridorLength, height]} />
-          <meshStandardMaterial color={WALL_TINT} roughness={1} metalness={0} {...relief(wall)} normalScale={NORMAL_SCALE} />
-        </mesh>
+        <group key={`wall-${side}`}>
+          <mesh position={[side * WALL_X, FLOOR_Y + height / 2, centerZ]} rotation={[0, (-side * Math.PI) / 2, 0]}>
+            <planeGeometry args={[length, height]} />
+            <PaintMaterial color={paint.wall} wash={paint.wash} surface={wall} />
+          </mesh>
+          <mesh position={[side * (WALL_X - 0.04), FLOOR_Y + 0.13, centerZ]}>
+            <boxGeometry args={[0.08, 0.26, length]} />
+            <meshStandardMaterial color="#0d0c0b" roughness={0.45} metalness={0.3} />
+          </mesh>
+          <mesh position={[side * (WALL_X - 0.07), CEILING_Y - 0.11, centerZ]}>
+            <boxGeometry args={[0.14, 0.22, length]} />
+            <PaintMaterial color={paint.ceiling} wash={paint.wash * 0.9} surface={beam} graded={false} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
+  const height = CEILING_Y - FLOOR_Y;
+  const lastRoom = layout.rooms[layout.rooms.length - 1];
+
+  const endWall = useSurface(PLASTER_MAPS, (WALL_X * 2) / 3, height / 3);
+  const pilaster = useSurface(PLASTER_MAPS, 0.25, height / 3);
+  const partition = useSurface(PLASTER_MAPS, 1.6, height / 3);
+
+  return (
+    <group>
+      {layout.rooms.map((span) => (
+        <RoomShell key={`room-${span.room}`} span={span} />
       ))}
 
       {/* End wall — home of the closing piece */}
       <mesh position={[0, FLOOR_Y + height / 2, layout.zBack]}>
         <planeGeometry args={[WALL_X * 2, height]} />
-        <meshStandardMaterial color={WALL_TINT} roughness={1} metalness={0} {...relief(endWall)} normalScale={NORMAL_SCALE} />
+        <PaintMaterial color={lastRoom.paint.wall} wash={lastRoom.paint.wash} surface={endWall} />
       </mesh>
 
       {/* Doorways between rooms */}
       {layout.partitions.map((p) => (
-        <Partition key={`partition-${p.room}`} z={p.z} room={p.room} surface={partition} />
-      ))}
-
-      {/* Baseboards + crown moulding */}
-      {[-1, 1].map((side) => (
-        <group key={`trim-${side}`}>
-          <mesh position={[side * (WALL_X - 0.05), FLOOR_Y + 0.15, centerZ]}>
-            <boxGeometry args={[0.1, 0.3, corridorLength]} />
-            <meshStandardMaterial color="#0a0a0a" roughness={0.4} metalness={0.3} />
-          </mesh>
-          <mesh position={[side * (WALL_X - 0.05), CEILING_Y - 0.15, centerZ]}>
-            <boxGeometry args={[0.1, 0.3, corridorLength]} />
-            <meshStandardMaterial color="#0a0a0a" roughness={0.4} metalness={0.3} />
-          </mesh>
-        </group>
+        <Partition
+          key={`partition-${p.room}`}
+          z={p.z}
+          room={p.room}
+          surface={partition}
+          front={layout.rooms[p.room].paint}
+          back={layout.rooms[p.room + 1].paint}
+        />
       ))}
 
       {/* Pilasters — one on the opposite wall of every wall-hung work, so each
@@ -469,8 +623,9 @@ function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
           key={`pilaster-${w.slug}`}
           x={-w.side * (WALL_X - 0.2)}
           z={w.position[2]}
-          height={height - 0.6}
+          height={height - 0.44}
           surface={pilaster}
+          paint={layout.rooms[w.room + 1].paint}
         />
       ))}
 
@@ -516,10 +671,11 @@ const beamFragment = /* glsl */ `
 `;
 const BEAM_OPACITY = 0.022;
 
-function LightBeam({ rig, color, intensity }: {
+function LightBeam({ rig, color, intensity, haze }: {
   rig: SpotRig;
   color: string;
   intensity: React.MutableRefObject<number>;
+  haze: number;
 }) {
   const material = useMemo(
     () =>
@@ -540,7 +696,7 @@ function LightBeam({ rig, color, intensity }: {
   );
 
   useFrame(() => {
-    material.uniforms.uOpacity.value = BEAM_OPACITY * intensity.current;
+    material.uniforms.uOpacity.value = BEAM_OPACITY * haze * intensity.current;
   });
 
   return (
@@ -585,9 +741,10 @@ function WallWash({ width, height, color, intensity }: {
   );
 }
 
-function ArtSpotlight({ rig, color, ceilingLocalY, intensity, lit, washSize }: {
+function ArtSpotlight({ rig, color, haze, ceilingLocalY, intensity, lit, washSize }: {
   rig: SpotRig;
   color: string;
+  haze: number;
   ceilingLocalY: number;
   intensity: React.MutableRefObject<number>;
   lit: boolean;               // false = low quality: fake the light pool instead
@@ -642,7 +799,7 @@ function ArtSpotlight({ rig, color, ceilingLocalY, intensity, lit, washSize }: {
       ) : (
         <WallWash width={washSize[0]} height={washSize[1]} color={color} intensity={intensity} />
       )}
-      <LightBeam rig={rig} color={color} intensity={intensity} />
+      <LightBeam rig={rig} color={color} intensity={intensity} haze={haze} />
     </group>
   );
 }
@@ -880,6 +1037,7 @@ function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange 
       <ArtSpotlight
         rig={work.spot}
         color={work.light}
+        haze={work.haze}
         ceilingLocalY={ceilingLocalY}
         intensity={lightLevel}
         lit={lit}
@@ -1188,12 +1346,13 @@ function Scene({ layout, nav, focused, quality, onDecline, onSelect, onStopChang
 
   return (
     <>
-      <fog attach="fog" args={['#070707', 8, 34]} />
+      <fog attach="fog" args={['#0a0a0a', 16, 72]} />
       <color attach="background" args={['#070707']} />
 
-      {/* Almost no fill — the spotlights do the work (a little more when faked) */}
-      <ambientLight intensity={high ? 0.06 : 0.12} />
-      <hemisphereLight args={['#2a2420', '#050505', high ? 0.15 : 0.3]} />
+      {/* Soft fill so the building reads; the walls carry their own wash and
+          the spotlights still pick out the works */}
+      <ambientLight intensity={high ? 0.45 : 0.6} />
+      <hemisphereLight args={['#fff1e0', '#3a3530', high ? 0.55 : 0.7]} />
 
       {high && monitoring && (
         <PerformanceMonitor
