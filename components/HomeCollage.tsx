@@ -16,7 +16,7 @@ import { BlendFunction, ToneMappingMode, type DepthOfFieldEffect } from 'postpro
 import * as THREE from 'three';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
-import { ROOMS, LOBBY, galleryWorks } from '@/data/gallery';
+import { ROOMS, LOBBY, galleryWorks, type Display } from '@/data/gallery';
 import { canvasFamily, useFontsReady, SERIF_STACK, MONO_STACK } from '@/lib/fonts';
 import { isIntroDone, onIntroDone, setCursorLabel, RETURN_STOP_KEY } from '@/lib/ui-events';
 import { detectQuality, rememberLowQuality, type Quality } from '@/lib/quality';
@@ -27,7 +27,7 @@ import Floor from './floor';
 /*  ROOM DIMENSIONS — Tweak these to change the size of the museum    */
 /* ------------------------------------------------------------------ */
 const WALL_X = 6.5;                     // How far the walls are from the center walkway
-const ART_X = WALL_X - 0.1;             // Artworks hang flush against the wall
+const ART_X = WALL_X - 0.01;            // Artworks hang flush against the wall
 const TRACK_X = WALL_X - 2.5;           // Ceiling light track, inset from each wall
 const CORRIDOR_WIDTH = WALL_X * 2 + 2;  // Total width passed to the floor
 const CEILING_Y = 4.5;
@@ -41,15 +41,13 @@ const ROOM_PAD = 4.2;                   // Space between a doorway and the first
 /* ------------------------------------------------------------------ */
 
 const RING_SPACING = 3.8; // z distance between consecutive works (alternating walls)
-const EYE_LEVEL = 0.35;   // centre height of each artwork
-const PANEL_W = 3.2;      // image size
-const PANEL_H = 2.4;
-const MAT = 0.32;         // passe-partout border around the image
-const FRAME = 0.11;       // frame moulding width
-const OUTER_W = PANEL_W + 2 * MAT + 2 * FRAME;
-const OUTER_H = PANEL_H + 2 * MAT + 2 * FRAME;
-const HERO_SCALE = 1.35;  // the closing piece on the end wall is larger
+const PAIR_SPACING = 2.9; // z distance between two works hung as a pair
+const EYE_LEVEL = 0.35;   // centre height of each wall-hung artwork
 const HERO_Y = EYE_LEVEL + 0.4;
+const FRAME_DEPTH = 0.09;     // how far a frame stands off the wall
+const CANVAS_DEPTH = 0.07;    // stretcher depth of an unframed canvas
+const PLINTH_H = 1.05;        // height of a display plinth
+const PLINTH_STANDOFF = 1.4;  // how far a plinth piece stands off the wall
 
 const CA_OFFSET = new THREE.Vector2(0.0007, 0.0005);
 const DOF_TARGET: [number, number, number] = [0, 0, 0];
@@ -84,19 +82,24 @@ function makeSpotRig(spot: THREE.Vector3, target: THREE.Vector3, angle: number, 
     beam: {
       dir,
       length,
-      radius: Math.tan(angle) * length * 1.15,
+      // The visible haze stays a narrow shaft even when the light itself is wide
+      radius: Math.tan(Math.min(angle, 0.4)) * length * 1.15,
       center: spot.clone().addScaledVector(dir, -length / 2),
       quaternion: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir),
     },
   };
 }
 
-const WALL_SPOT = makeSpotRig(
-  new THREE.Vector3(0, CEILING_Y - 0.42 - EYE_LEVEL, ART_X - TRACK_X),
-  new THREE.Vector3(0, -0.35, 0),
-  0.36,
-  34
-);
+/** A track spot sized to cover one work: wide enough for the whole frame. */
+function spotFor(outerW: number, outerH: number, y: number, trackZ: number): SpotRig {
+  const spot = new THREE.Vector3(0, CEILING_Y - 0.42 - y, trackZ);
+  const target = new THREE.Vector3(0, -outerH * 0.1, 0);
+  const dist = spot.distanceTo(target);
+  const halfDiagonal = Math.hypot(outerW, outerH) / 2;
+  const angle = THREE.MathUtils.clamp(Math.atan((halfDiagonal * 1.2) / dist), 0.34, 0.95);
+  return makeSpotRig(spot, target, angle, 36);
+}
+
 const HERO_SPOT = makeSpotRig(
   new THREE.Vector3(0, CEILING_Y - 0.42 - HERO_Y, 4.2),
   new THREE.Vector3(0, -0.9, 0),
@@ -118,7 +121,11 @@ type GalleryWork = {
   rotationY: number;
   side: number;      // -1 left wall, 1 right wall, 0 end wall
   hero: boolean;
-  scale: number;
+  display: Display;
+  outerW: number;    // overall size including mat and frame
+  outerH: number;
+  labelBelow: boolean; // label under the work instead of beside it (pairs)
+  pilaster: boolean;   // gets a pilaster on the opposite wall
   spot: SpotRig;
   light: string;
   haze: number;      // how visible this room's light beams are
@@ -136,10 +143,13 @@ type RoomSpan = {
 };
 
 type Stop = {
+  kind: 'entrance' | 'room' | 'work';
   pos: THREE.Vector3;       // where the visitor stands
   look: THREE.Vector3;      // what they look at
   normal: THREE.Vector3;    // direction the work faces (close-up approaches along it)
-  size: number;             // outer frame width, used to frame the close-up
+  size: number;             // outer frame width and height, used to frame the close-up
+  sizeH: number;
+  fov: number;              // lens: wider for room overviews
   workIndex: number | null;
   room: number;
 };
@@ -147,6 +157,7 @@ type Stop = {
 type GalleryLayout = {
   works: GalleryWork[];
   stops: Stop[];
+  stopOfWork: number[];     // stop index for each work
   partitions: { z: number; room: number }[];
   rooms: RoomSpan[];
   benches: number[];
@@ -156,43 +167,110 @@ type GalleryLayout = {
 
 function layoutGallery(): GalleryLayout {
   const works: GalleryWork[] = [];
+  const stops: Stop[] = [];
+  const stopOfWork: number[] = [];
   const partitions: GalleryLayout['partitions'] = [];
   const benches: number[] = [];
   let z = ENTRY_Z;
-  let wallCount = 0;
+  let side = 1;
+
+  stops.push({
+    kind: 'entrance',
+    pos: new THREE.Vector3(0, 0, CAMERA_START_Z),
+    look: new THREE.Vector3(0, 0, CAMERA_START_Z - 10),
+    normal: new THREE.Vector3(0, 0, 1),
+    size: 0,
+    sizeH: 0,
+    fov: 60,
+    workIndex: null,
+    room: 0,
+  });
 
   ROOMS.forEach((room, r) => {
     partitions.push({ z, room: r });
-    const items = galleryWorks.filter((w) => w.room === r && !w.hero);
     const roomStart = z;
+    const items = galleryWorks.filter((w) => w.room === r && !w.hero);
+
+    // Overview: just inside the doorway, looking down the whole room
+    stops.push({
+      kind: 'room',
+      pos: new THREE.Vector3(0, 0.25, roomStart - 1.1),
+      look: new THREE.Vector3(0, 0.45, roomStart - 13),
+      normal: new THREE.Vector3(0, 0, 1),
+      size: 0,
+      sizeH: 0,
+      fov: 72,
+      workIndex: null,
+      room: r,
+    });
+
+    let wz = roomStart - ROOM_PAD;
     items.forEach((w, j) => {
-      const side = wallCount++ % 2 === 0 ? -1 : 1;
+      const d = w.display;
+      if (d.pair && j > 0) {
+        // Second half of a pair: same wall, close beside the previous work
+        wz -= PAIR_SPACING;
+      } else {
+        side = -side;
+        if (j > 0) wz -= RING_SPACING;
+      }
+      const outerW = d.w + 2 * (d.mat + d.frame);
+      const outerH = d.h + 2 * (d.mat + d.frame);
+      const plinth = d.kind === 'plinth';
+      const standoff = plinth ? PLINTH_STANDOFF : 0;
+      const x = side * (ART_X - standoff);
+      const y = plinth ? FLOOR_Y + PLINTH_H + outerH / 2 : EYE_LEVEL;
+      const index = works.length;
+
       works.push({
-        index: works.length,
+        index,
         slug: w.slug,
         title: w.title,
         category: w.category,
         src: w.src,
         room: r,
-        position: [side * ART_X, EYE_LEVEL, roomStart - ROOM_PAD - j * RING_SPACING],
+        position: [x, y, wz],
         // Left wall faces +x, right wall faces -x
         rotationY: side < 0 ? Math.PI / 2 : -Math.PI / 2,
         side,
         hero: false,
-        scale: 1,
-        spot: WALL_SPOT,
+        display: d,
+        outerW,
+        outerH,
+        labelBelow: !!d.pair || !!items[j + 1]?.display.pair,
+        pilaster: !d.pair,
+        spot: spotFor(outerW, outerH, y, ART_X - TRACK_X - standoff),
         light: room.light,
         haze: room.haze,
       });
+
+      // Stand back in proportion to the work, for a 3/4 view
+      const dist = THREE.MathUtils.clamp(outerW * 1.45, 3.6, 5.9);
+      stopOfWork.push(stops.length);
+      stops.push({
+        kind: 'work',
+        pos: new THREE.Vector3(x - side * dist, 0.05, wz + 1.1),
+        look: new THREE.Vector3(x, y - 0.05, wz),
+        normal: new THREE.Vector3(-side, 0, 0),
+        size: outerW,
+        sizeH: outerH,
+        fov: 60,
+        workIndex: index,
+        room: r,
+      });
     });
-    const lastZ = roomStart - ROOM_PAD - Math.max(0, items.length - 1) * RING_SPACING;
-    benches.push((roomStart + lastZ) / 2);
-    z = lastZ - ROOM_PAD;
+
+    benches.push((roomStart + wz) / 2);
+    z = wz - ROOM_PAD;
   });
 
   // Closing piece, centred on the end wall of the last room
   const hero = galleryWorks.find((w) => w.hero)!;
+  const hd = hero.display;
+  const heroW = hd.w + 2 * (hd.mat + hd.frame);
+  const heroH = hd.h + 2 * (hd.mat + hd.frame);
   const zBack = z - 3;
+  const heroZ = zBack + 0.01;
   works.push({
     index: works.length,
     slug: hero.slug,
@@ -200,48 +278,31 @@ function layoutGallery(): GalleryLayout {
     category: hero.category,
     src: hero.src,
     room: hero.room,
-    position: [0, HERO_Y, zBack + 0.1],
+    position: [0, HERO_Y, heroZ],
     rotationY: 0,
     side: 0,
     hero: true,
-    scale: HERO_SCALE,
+    display: hd,
+    outerW: heroW,
+    outerH: heroH,
+    labelBelow: false,
+    pilaster: false,
     spot: HERO_SPOT,
     light: ROOMS[hero.room].light,
     haze: ROOMS[hero.room].haze,
   });
-
-  const stops: Stop[] = [
-    {
-      pos: new THREE.Vector3(0, 0, CAMERA_START_Z),
-      look: new THREE.Vector3(0, 0, CAMERA_START_Z - 10),
-      normal: new THREE.Vector3(0, 0, 1),
-      size: 0,
-      workIndex: null,
-      room: 0,
-    },
-    ...works.map((w): Stop => {
-      const [x, y, wz] = w.position;
-      if (w.hero) {
-        return {
-          pos: new THREE.Vector3(0, 0.3, wz + 9),
-          look: new THREE.Vector3(0, y, wz),
-          normal: new THREE.Vector3(0, 0, 1),
-          size: OUTER_W * w.scale,
-          workIndex: w.index,
-          room: w.room,
-        };
-      }
-      return {
-        // Stand across the room, slightly before the work, for a 3/4 view
-        pos: new THREE.Vector3(w.side * 0.6, 0.05, wz + 1.1),
-        look: new THREE.Vector3(x, y - 0.05, wz),
-        normal: new THREE.Vector3(-w.side, 0, 0),
-        size: OUTER_W * w.scale,
-        workIndex: w.index,
-        room: w.room,
-      };
-    }),
-  ];
+  stopOfWork.push(stops.length);
+  stops.push({
+    kind: 'work',
+    pos: new THREE.Vector3(0, 0.3, heroZ + 9),
+    look: new THREE.Vector3(0, HERO_Y, heroZ),
+    normal: new THREE.Vector3(0, 0, 1),
+    size: heroW,
+    sizeH: heroH,
+    fov: 60,
+    workIndex: works.length - 1,
+    room: hero.room,
+  });
 
   const zFront = CAMERA_START_Z + 8;
   const rooms: RoomSpan[] = [
@@ -255,7 +316,7 @@ function layoutGallery(): GalleryLayout {
     })),
   ];
 
-  return { works, stops, partitions, rooms, benches, zFront, zBack };
+  return { works, stops, stopOfWork, partitions, rooms, benches, zFront, zBack };
 }
 
 /* Shared navigation state between the DOM overlay and the camera rig */
@@ -618,7 +679,7 @@ function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
 
       {/* Pilasters — one on the opposite wall of every wall-hung work, so each
           wall alternates work / pilaster / work and every piece gets its own bay. */}
-      {layout.works.filter((w) => !w.hero).map((w) => (
+      {layout.works.filter((w) => w.pilaster).map((w) => (
         <Pilaster
           key={`pilaster-${w.slug}`}
           x={-w.side * (WALL_X - 0.2)}
@@ -726,7 +787,7 @@ function WallWash({ width, height, color, intensity }: {
   });
   if (!texture) return null;
   return (
-    <mesh position={[0, 0.25, -0.09]} raycast={() => null}>
+    <mesh position={[0, 0.25, 0.004]} raycast={() => null}>
       <planeGeometry args={[width * 1.9, height * 2]} />
       <meshBasicMaterial
         ref={mat}
@@ -748,7 +809,7 @@ function ArtSpotlight({ rig, color, haze, ceilingLocalY, intensity, lit, washSiz
   ceilingLocalY: number;
   intensity: React.MutableRefObject<number>;
   lit: boolean;               // false = low quality: fake the light pool instead
-  washSize: [number, number];
+  washSize: [number, number] | null; // null = nothing behind the work to wash
 }) {
   const spot = useRef<THREE.SpotLight>(null);
   const target = useRef<THREE.Object3D>(null);
@@ -797,7 +858,7 @@ function ArtSpotlight({ rig, color, haze, ceilingLocalY, intensity, lit, washSiz
           <object3D ref={target} position={rig.target} />
         </>
       ) : (
-        <WallWash width={washSize[0]} height={washSize[1]} color={color} intensity={intensity} />
+        washSize && <WallWash width={washSize[0]} height={washSize[1]} color={color} intensity={intensity} />
       )}
       <LightBeam rig={rig} color={color} intensity={intensity} haze={haze} />
     </group>
@@ -906,8 +967,11 @@ function useLabelTexture(index: number, title: string, category: string) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  A single framed artwork                                            */
+/*  A single artwork: framed, unframed canvas, or leaning on a plinth  */
 /* ------------------------------------------------------------------ */
+const noRaycast = () => null;
+const PLINTH_DEPTH = 0.8;
+
 function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange }: {
   work: GalleryWork;
   focused: boolean;
@@ -920,18 +984,19 @@ function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange 
   const matMat = useRef<THREE.MeshStandardMaterial>(null);
   const [hovered, setHovered] = useState(false);
   const lightLevel = useRef(1);
+  const d = work.display;
 
   const texture = useArtworkTexture(work.src, work.title);
   const labelTexture = useLabelTexture(work.index, work.title, work.category);
 
-  // Crop the image to the panel's aspect ratio ("object-fit: cover")
+  // Crop the image to the work's aspect ratio ("object-fit: cover")
   useLayoutEffect(() => {
     const img = texture.image as { width: number; height: number } | undefined;
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = 8;
     if (img?.width && img?.height) {
       const imageAspect = img.width / img.height;
-      const panelAspect = PANEL_W / PANEL_H;
+      const panelAspect = d.w / d.h;
       if (imageAspect > panelAspect) {
         const r = panelAspect / imageAspect;
         texture.repeat.set(r, 1);
@@ -943,7 +1008,7 @@ function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange 
       }
     }
     texture.needsUpdate = true;
-  }, [texture]);
+  }, [texture, d.w, d.h]);
 
   useFrame((_, delta) => {
     // In close-up, the selected work brightens and the rest of the room dims
@@ -987,48 +1052,93 @@ function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange 
     onSelect(work.index);
   }, [onSelect, work.index]);
 
-  const outerW = OUTER_W * work.scale;
-  const outerH = OUTER_H * work.scale;
+  const { outerW, outerH } = work;
   const ceilingLocalY = CEILING_Y - work.position[1];
+  const floorLocalY = FLOOR_Y - work.position[1];
+  const isCanvas = d.kind === 'canvas';
+  const isPlinth = d.kind === 'plinth';
+  const imageZ = isCanvas ? CANVAS_DEPTH + 0.002 : 0.04;
+  const frameRoughness = d.frameMetal > 0.5 ? 0.32 : 0.5;
+
+  const labelPosition: [number, number, number] = isPlinth
+    ? [0, -outerH / 2 - 0.32, PLINTH_DEPTH / 2 + 0.006]
+    : work.labelBelow
+      ? [0, -outerH / 2 - 0.34, 0.01]
+      : [outerW / 2 + 0.5, -outerH / 2 + Math.min(0.75, outerH * 0.3), 0.01];
 
   return (
     <group position={work.position} rotation={[0, work.rotationY, 0]}>
-      <group scale={work.scale}>
-        {/* Frame moulding */}
-        <mesh position={[0, 0, -0.05]} raycast={() => null}>
-          <boxGeometry args={[OUTER_W, OUTER_H, 0.1]} />
-          <meshStandardMaterial color="#0e0d0c" roughness={0.38} metalness={0.25} />
-        </mesh>
+      {/* Pivot at the bottom edge, so a plinth piece can lean back */}
+      <group position={[0, -outerH / 2, isPlinth ? 0.08 : 0]} rotation={[isPlinth ? -0.14 : 0, 0, 0]}>
+        <group position={[0, outerH / 2, 0]}>
+          {isCanvas ? (
+            /* Stretched canvas: a deep box with raw canvas edges */
+            <mesh position={[0, 0, CANVAS_DEPTH / 2]} raycast={noRaycast}>
+              <boxGeometry args={[d.w, d.h, CANVAS_DEPTH]} />
+              <meshStandardMaterial color="#d8d1c3" roughness={0.95} />
+            </mesh>
+          ) : (
+            <>
+              {/* Backing board */}
+              <mesh position={[0, 0, 0.015]} raycast={noRaycast}>
+                <boxGeometry args={[outerW - 0.01, outerH - 0.01, 0.03]} />
+                <meshStandardMaterial color={d.frameColor} roughness={frameRoughness} metalness={d.frameMetal} />
+              </mesh>
+              {/* Frame moulding: four bars standing proud of the mat */}
+              {[-1, 1].map((s) => (
+                <mesh key={`h${s}`} position={[0, s * (outerH / 2 - d.frame / 2), FRAME_DEPTH / 2]} raycast={noRaycast}>
+                  <boxGeometry args={[outerW, d.frame, FRAME_DEPTH]} />
+                  <meshStandardMaterial color={d.frameColor} roughness={frameRoughness} metalness={d.frameMetal} />
+                </mesh>
+              ))}
+              {[-1, 1].map((s) => (
+                <mesh key={`v${s}`} position={[s * (outerW / 2 - d.frame / 2), 0, FRAME_DEPTH / 2]} raycast={noRaycast}>
+                  <boxGeometry args={[d.frame, outerH - 2 * d.frame, FRAME_DEPTH]} />
+                  <meshStandardMaterial color={d.frameColor} roughness={frameRoughness} metalness={d.frameMetal} />
+                </mesh>
+              ))}
+              {/* Passe-partout */}
+              {d.mat > 0 && (
+                <mesh position={[0, 0, 0.036]} raycast={noRaycast}>
+                  <planeGeometry args={[d.w + 2 * d.mat, d.h + 2 * d.mat]} />
+                  <meshStandardMaterial ref={matMat} color="#e6e1d8" roughness={0.92} emissive="#e6e1d8" emissiveIntensity={0} />
+                </mesh>
+              )}
+            </>
+          )}
 
-        {/* Passe-partout */}
-        <mesh position={[0, 0, 0.002]} raycast={() => null}>
-          <planeGeometry args={[PANEL_W + 2 * MAT, PANEL_H + 2 * MAT]} />
-          <meshStandardMaterial ref={matMat} color="#e6e1d8" roughness={0.92} emissive="#e6e1d8" emissiveIntensity={0} />
-        </mesh>
-
-        {/* The work itself — lit by the spotlight, not self-illuminated */}
-        <mesh
-          position={[0, 0, 0.006]}
-          onPointerOver={handleOver}
-          onPointerOut={handleOut}
-          onClick={handleClick}
-        >
-          <planeGeometry args={[PANEL_W, PANEL_H]} />
-          <meshStandardMaterial
-            ref={imageMat}
-            map={texture}
-            emissiveMap={texture}
-            emissive="#ffffff"
-            emissiveIntensity={0.03}
-            roughness={0.55}
-            metalness={0}
-          />
-        </mesh>
+          {/* The work itself — lit by the spotlight, not self-illuminated */}
+          <mesh
+            position={[0, 0, imageZ]}
+            onPointerOver={handleOver}
+            onPointerOut={handleOut}
+            onClick={handleClick}
+          >
+            <planeGeometry args={[d.w, d.h]} />
+            <meshStandardMaterial
+              ref={imageMat}
+              map={texture}
+              emissiveMap={texture}
+              emissive="#ffffff"
+              emissiveIntensity={0.03}
+              roughness={isCanvas ? 0.85 : 0.55}
+              metalness={0}
+            />
+          </mesh>
+        </group>
       </group>
 
-      {/* Wall label */}
+      {/* Plinth under a leaning piece */}
+      {isPlinth && (
+        <mesh position={[0, (floorLocalY - outerH / 2) / 2, 0]} raycast={noRaycast}>
+          <boxGeometry args={[outerW + 0.5, -outerH / 2 - floorLocalY, PLINTH_DEPTH]} />
+          <meshStandardMaterial color="#d9d4ca" roughness={0.8} />
+        </mesh>
+      )}
+
+      {/* Label: beside the work, below it (pairs), or on the plinth */}
       {labelTexture && (
-        <mesh position={[outerW / 2 + 0.5, -outerH / 2 + 0.75, 0.01]} raycast={() => null}>
+        <mesh position={labelPosition} raycast={noRaycast}>
           <planeGeometry args={[0.56, 0.35]} />
           <meshStandardMaterial map={labelTexture} roughness={0.9} emissiveMap={labelTexture} emissive="#ffffff" emissiveIntensity={0.04} />
         </mesh>
@@ -1041,10 +1151,10 @@ function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange 
         ceilingLocalY={ceilingLocalY}
         intensity={lightLevel}
         lit={lit}
-        washSize={[outerW, outerH]}
+        washSize={isPlinth ? null : [outerW, outerH]}
       />
       <FloorPool
-        y={FLOOR_Y - work.position[1] + 0.01}
+        y={floorLocalY + 0.01}
         z={work.hero ? 2.4 : 0.9}
         width={outerW * 1.5}
         color={work.light}
@@ -1061,8 +1171,9 @@ const SNAP_DELAY_MS = 160;
 const CAPTION_WIDTH = 400;       // px — keep in sync with the caption panel's md:w-[400px]
 const CAPTION_BREAKPOINT = 768;  // px — below this the caption is a bottom sheet
 
-function CameraRig({ stops, nav, onStopChange, onUserMove, progressDot }: {
+function CameraRig({ stops, stopOfWork, nav, onStopChange, onUserMove, progressDot }: {
   stops: Stop[];
+  stopOfWork: number[];
   nav: React.MutableRefObject<NavState>;
   onStopChange: (stop: number) => void;
   onUserMove: () => void;
@@ -1167,6 +1278,14 @@ function CameraRig({ stops, nav, onStopChange, onUserMove, progressDot }: {
     const parked = Math.pow(Math.abs(2 * f - 1), 1.5);
     look.lerpVectors(forward, stopLook, parked);
 
+    // Lens: wider for room overviews, normal in front of a work or in close-up
+    const cam = camera as THREE.PerspectiveCamera;
+    const fovTarget = THREE.MathUtils.lerp(THREE.MathUtils.lerp(A.fov, B.fov, e), 60, focusAmt.current);
+    if (Math.abs(cam.fov - fovTarget) > 0.01) {
+      cam.fov = THREE.MathUtils.damp(cam.fov, fovTarget, 4, delta);
+      cam.updateProjectionMatrix();
+    }
+
     // Entrance: start further back and higher, then push in as the intro opens
     if (isIntroDone()) introAmt.current = THREE.MathUtils.damp(introAmt.current, 1, 0.85, delta);
     const back = 1 - introAmt.current;
@@ -1180,7 +1299,7 @@ function CameraRig({ stops, nav, onStopChange, onUserMove, progressDot }: {
     if (n.focused !== null) lastFocused.current = n.focused;
     focusAmt.current = THREE.MathUtils.damp(focusAmt.current, n.focused !== null ? 1 : 0, 2.6, delta);
     if (lastFocused.current !== null && focusAmt.current > 0.001) {
-      const fs = stops[lastFocused.current + 1];
+      const fs = stops[stopOfWork[lastFocused.current]];
       const { width, height } = size;
       const aspect = width / height;
       const desktop = width >= CAPTION_BREAKPOINT;
@@ -1192,7 +1311,7 @@ function CameraRig({ stops, nav, onStopChange, onUserMove, progressDot }: {
       const d = Math.max(
         3.2,
         (fs.size * 1.3) / (usableW * 2 * tanHalf * aspect),
-        (fs.size * (OUTER_H / OUTER_W) * 1.3) / (usableH * 2 * tanHalf)
+        (fs.sizeH * 1.3) / (usableH * 2 * tanHalf)
       );
       focusPos.copy(fs.look).addScaledVector(fs.normal, d);
       // Aim off-centre so the work sits beside (desktop) or above (mobile) the caption
@@ -1246,7 +1365,11 @@ function CameraRig({ stops, nav, onStopChange, onUserMove, progressDot }: {
 /* ------------------------------------------------------------------ */
 /*  Depth of field — background melts away in close-up                 */
 /* ------------------------------------------------------------------ */
-function FocusBlur({ stops, nav }: { stops: Stop[]; nav: React.MutableRefObject<NavState> }) {
+function FocusBlur({ stops, stopOfWork, nav }: {
+  stops: Stop[];
+  stopOfWork: number[];
+  nav: React.MutableRefObject<NavState>;
+}) {
   const dof = useRef<DepthOfFieldEffect>(null);
   const lastFocused = useRef<number | null>(null);
 
@@ -1256,7 +1379,7 @@ function FocusBlur({ stops, nav }: { stops: Stop[]; nav: React.MutableRefObject<
     const n = nav.current;
     if (n.focused !== null) lastFocused.current = n.focused;
     if (lastFocused.current !== null && effect.target) {
-      effect.target.copy(stops[lastFocused.current + 1].look);
+      effect.target.copy(stops[stopOfWork[lastFocused.current]].look);
     }
     effect.bokehScale = THREE.MathUtils.damp(effect.bokehScale, n.focused !== null ? 4.5 : 0, 2.5, Math.min(delta, 0.1));
   });
@@ -1389,6 +1512,7 @@ function Scene({ layout, nav, focused, quality, onDecline, onSelect, onStopChang
 
       <CameraRig
         stops={layout.stops}
+        stopOfWork={layout.stopOfWork}
         nav={nav}
         onStopChange={onStopChange}
         onUserMove={onUserMove}
@@ -1448,14 +1572,14 @@ export default function HomeCollage() {
   const openProject = useCallback((index: number) => {
     const slug = layout.works[index].slug;
     try {
-      sessionStorage.setItem(RETURN_STOP_KEY, String(index + 1));
+      sessionStorage.setItem(RETURN_STOP_KEY, String(layout.stopOfWork[index]));
     } catch {
       /* ignore */
     }
     setCursorLabel(null);
     setLeavingTo(slug);
     router.prefetch(`/works/${slug}`);
-  }, [layout.works, router]);
+  }, [layout.works, layout.stopOfWork, router]);
 
   useEffect(() => {
     const mq = window.matchMedia(`(min-width: ${CAPTION_BREAKPOINT}px)`);
@@ -1488,9 +1612,9 @@ export default function HomeCollage() {
       openProject(index);
       return;
     }
-    goTo(index + 1);
+    goTo(layout.stopOfWork[index]);
     setFocus(index);
-  }, [goTo, openProject, setFocus]);
+  }, [goTo, layout.stopOfWork, openProject, setFocus]);
 
   const handleUserMove = useCallback(() => {
     setHasInteracted(true);
@@ -1523,7 +1647,18 @@ export default function HomeCollage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [goTo, handleSelect, layout.stops, setFocus]);
 
-  const counter = currentStop.workIndex !== null ? String(currentStop.workIndex + 1).padStart(2, '0') : '00';
+  // What the corner readout says: a work number, a room numeral, or the entrance
+  const isRoomStop = currentStop.kind === 'room';
+  const counter = currentStop.workIndex !== null
+    ? String(currentStop.workIndex + 1).padStart(2, '0')
+    : isRoomStop ? room.numeral : '00';
+  const worksInRoom = layout.works.filter((w) => w.room === currentStop.room).length;
+  const eyebrow = currentStop.kind === 'entrance'
+    ? 'Meowhlock Studio — The Collection'
+    : isRoomStop ? 'Now entering' : `Room ${room.numeral} — ${room.name}`;
+  const caption = currentStop.workIndex !== null
+    ? layout.works[currentStop.workIndex].title
+    : isRoomStop ? room.name : null;
 
   return (
     <div className="w-full relative h-screen overflow-hidden bg-[#070707]">
@@ -1534,7 +1669,7 @@ export default function HomeCollage() {
       >
         <AnimatePresence mode="wait">
           <motion.div
-            key={`room-${currentStop.room}-${currentStop.workIndex === null}`}
+            key={`room-${currentStop.room}-${currentStop.kind}`}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
@@ -1542,7 +1677,7 @@ export default function HomeCollage() {
             className="text-[10px] md:text-[11px] uppercase tracking-[0.32em] text-white/55"
             style={{ fontFamily: MONO }}
           >
-            {currentStop.workIndex === null ? 'Meowhlock Studio — The Collection' : `Room ${room.numeral} — ${room.name}`}
+            {eyebrow}
           </motion.div>
         </AnimatePresence>
         <div className="flex items-end gap-3 mt-2">
@@ -1562,13 +1697,13 @@ export default function HomeCollage() {
             </AnimatePresence>
           </div>
           <span className="pb-2 md:pb-3 text-xs text-white/40" style={{ fontFamily: MONO }}>
-            / {String(totalWorks).padStart(2, '0')}
+            {isRoomStop ? `${worksInRoom} works` : `/ ${String(totalWorks).padStart(2, '0')}`}
           </span>
         </div>
         <AnimatePresence mode="wait">
-          {currentStop.workIndex !== null && (
+          {caption !== null && (
             <motion.div
-              key={`title-${currentStop.workIndex}`}
+              key={`title-${stop}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
@@ -1576,7 +1711,7 @@ export default function HomeCollage() {
               className="mt-1 text-lg md:text-2xl text-white/85"
               style={{ fontFamily: SERIF }}
             >
-              {layout.works[currentStop.workIndex].title}
+              {caption}
             </motion.div>
           )}
         </AnimatePresence>
@@ -1604,7 +1739,7 @@ export default function HomeCollage() {
             className="absolute left-1/2 -translate-x-1/2 h-px bg-white/35"
             style={{
               top: `${(i / lastStop) * 100}%`,
-              width: i > 0 && layout.stops[i - 1].room !== s.room ? 12 : 5,
+              width: s.kind === 'room' ? 12 : 5,
             }}
           />
         ))}
@@ -1704,7 +1839,7 @@ export default function HomeCollage() {
             {quality === 'high' ? (
               <EffectComposer key="high" multisampling={4}>
                 <Bloom intensity={0.55} luminanceThreshold={0.85} luminanceSmoothing={0.3} mipmapBlur />
-                <FocusBlur stops={layout.stops} nav={nav} />
+                <FocusBlur stops={layout.stops} stopOfWork={layout.stopOfWork} nav={nav} />
                 <ChromaticAberration offset={CA_OFFSET} radialModulation modulationOffset={0.35} />
                 <ToneMapping mode={ToneMappingMode.AGX} />
                 <Noise premultiply blendFunction={BlendFunction.ADD} opacity={0.35} />

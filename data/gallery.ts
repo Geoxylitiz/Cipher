@@ -22,6 +22,56 @@ export const LOBBY = { wall: '#2b2a28', ceiling: '#191919', wash: 0.7 } as const
 /** Closing piece, hung larger on the end wall of the last room. */
 export const HERO_SLUG = 'nine-lives';
 
+/**
+ * How a work is presented. Sizes are in metres and describe the image
+ * itself; `mat` and `frame` are border widths around it.
+ *
+ * framed  a frame (and usually a mat) hung on the wall
+ * canvas  an unframed stretched canvas hung on the wall
+ * plinth  a small framed work leaning on a plinth, standing off the wall
+ */
+export type Display = {
+  kind: 'framed' | 'canvas' | 'plinth';
+  w: number;
+  h: number;
+  mat: number;
+  frame: number;
+  frameColor: string;
+  frameMetal: number;
+  pair?: boolean; // hang beside the previous work, on the same wall
+};
+
+const BLACK = { frameColor: '#0e0d0c', frameMetal: 0.25 };
+const OAK = { frameColor: '#8b6b47', frameMetal: 0.05 };
+const WALNUT = { frameColor: '#4a3222', frameMetal: 0.05 };
+const BRASS = { frameColor: '#a98953', frameMetal: 0.85 };
+
+const LANDSCAPE: Display = { kind: 'framed', w: 3.2, h: 2.4, mat: 0.32, frame: 0.11, ...BLACK };
+const LANDSCAPE_OAK: Display = { ...LANDSCAPE, ...OAK };
+const PORTRAIT: Display = { kind: 'framed', w: 2.1, h: 2.8, mat: 0.26, frame: 0.1, ...BLACK };
+const PORTRAIT_OAK: Display = { ...PORTRAIT, ...OAK };
+const SQUARE_WALNUT: Display = { kind: 'framed', w: 2.3, h: 2.3, mat: 0.24, frame: 0.12, ...WALNUT };
+const SMALL_BRASS: Display = { kind: 'framed', w: 1.45, h: 1.45, mat: 0.3, frame: 0.05, ...BRASS };
+const LARGE_CANVAS: Display = { kind: 'canvas', w: 4.6, h: 3.1, mat: 0, frame: 0, ...BLACK };
+const ON_PLINTH: Display = { kind: 'plinth', w: 1.7, h: 1.25, mat: 0, frame: 0.06, ...BLACK };
+const HERO: Display = { kind: 'framed', w: 4.3, h: 3.2, mat: 0.42, frame: 0.15, ...BLACK };
+
+/** Presentation of each work, by slug. Anything not listed hangs as a framed landscape. */
+const DISPLAY: Record<string, Display> = {
+  'night-shift': LANDSCAPE,
+  'low-light': PORTRAIT_OAK,
+  'velvet-static': LARGE_CANVAS,
+  'open-studio': LANDSCAPE,
+  'quiet-hours': SMALL_BRASS,
+  'second-glance': { ...SMALL_BRASS, pair: true },
+  'afterimage': ON_PLINTH,
+  'study-in-amber': PORTRAIT,
+  'paper-moon': LANDSCAPE_OAK,
+  'soft-machines': LARGE_CANVAS,
+  'small-hours': SQUARE_WALNUT,
+  [HERO_SLUG]: HERO,
+};
+
 export type GalleryEntry = {
   number: number; // 1-based position in the walk-through
   slug: string;
@@ -30,6 +80,7 @@ export type GalleryEntry = {
   src: string;
   room: number;
   hero: boolean;
+  display: Display;
 };
 
 export function imageFor(id: string) {
@@ -52,6 +103,7 @@ export const galleryWorks: GalleryEntry[] = (() => {
           src: imageFor(w.id),
           room: r,
           hero: false,
+          display: DISPLAY[w.slug] ?? LANDSCAPE,
         });
       });
   });
@@ -65,6 +117,7 @@ export const galleryWorks: GalleryEntry[] = (() => {
       src: imageFor(hero.id),
       room: ROOMS.length - 1,
       hero: true,
+      display: DISPLAY[hero.slug] ?? HERO,
     });
   }
   return entries;
