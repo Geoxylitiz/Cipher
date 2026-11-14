@@ -54,7 +54,8 @@ const SQUARE_WALNUT: Display = { kind: 'framed', w: 2.3, h: 2.3, mat: 0.24, fram
 const SMALL_BRASS: Display = { kind: 'framed', w: 1.45, h: 1.45, mat: 0.3, frame: 0.05, ...BRASS };
 const LARGE_CANVAS: Display = { kind: 'canvas', w: 4.6, h: 3.1, mat: 0, frame: 0, ...BLACK };
 const ON_PLINTH: Display = { kind: 'plinth', w: 1.7, h: 1.25, mat: 0, frame: 0.06, ...BLACK };
-const HERO: Display = { kind: 'framed', w: 4.3, h: 3.2, mat: 0.42, frame: 0.15, ...BLACK };
+// The closing piece: wide, close-framed, hung alone on the dark end panel
+const HERO: Display = { kind: 'framed', w: 6.2, h: 3.5, mat: 0, frame: 0.07, ...BRASS };
 
 /** Presentation of each work, by slug. Anything not listed hangs as a framed landscape. */
 const DISPLAY: Record<string, Display> = {

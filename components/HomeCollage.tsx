@@ -43,7 +43,11 @@ const ROOM_PAD = 4.2;                   // Space between a doorway and the first
 const RING_SPACING = 3.8; // z distance between consecutive works (alternating walls)
 const PAIR_SPACING = 2.9; // z distance between two works hung as a pair
 const EYE_LEVEL = 0.35;   // centre height of each wall-hung artwork
-const HERO_Y = EYE_LEVEL + 0.4;
+const FINALE_DEPTH = 6;       // extra floor between the last wall work and the end wall
+const FINALE_PANEL_W = 9.6;   // dark feature panel behind the closing piece
+const FINALE_PANEL_T = 0.12;
+const FINALE_PANEL_TINT = '#1d1c1b';
+const HERO_BOTTOM = 1.15;     // height of the closing piece's lower edge above the floor
 const FRAME_DEPTH = 0.09;     // how far a frame stands off the wall
 const CANVAS_DEPTH = 0.07;    // stretcher depth of an unframed canvas
 const PLINTH_H = 1.05;        // height of a display plinth
@@ -91,21 +95,14 @@ function makeSpotRig(spot: THREE.Vector3, target: THREE.Vector3, angle: number, 
 }
 
 /** A track spot sized to cover one work: wide enough for the whole frame. */
-function spotFor(outerW: number, outerH: number, y: number, trackZ: number): SpotRig {
-  const spot = new THREE.Vector3(0, CEILING_Y - 0.42 - y, trackZ);
+function spotFor(outerW: number, outerH: number, y: number, trackZ: number, intensity = 36, trackX = 0): SpotRig {
+  const spot = new THREE.Vector3(trackX, CEILING_Y - 0.42 - y, trackZ);
   const target = new THREE.Vector3(0, -outerH * 0.1, 0);
   const dist = spot.distanceTo(target);
   const halfDiagonal = Math.hypot(outerW, outerH) / 2;
   const angle = THREE.MathUtils.clamp(Math.atan((halfDiagonal * 1.2) / dist), 0.34, 0.95);
-  return makeSpotRig(spot, target, angle, 36);
+  return makeSpotRig(spot, target, angle, intensity);
 }
-
-const HERO_SPOT = makeSpotRig(
-  new THREE.Vector3(0, CEILING_Y - 0.42 - HERO_Y, 4.2),
-  new THREE.Vector3(0, -0.9, 0),
-  0.62,
-  64
-);
 
 /* ------------------------------------------------------------------ */
 /*  Layout                                                             */
@@ -126,8 +123,9 @@ type GalleryWork = {
   outerH: number;
   labelBelow: boolean; // label under the work instead of beside it (pairs)
   pilaster: boolean;   // gets a pilaster on the opposite wall
-  spot: SpotRig;
+  spots: SpotRig[];
   light: string;
+  wall: string;      // colour of the wall behind the work
   haze: number;      // how visible this room's light beams are
 };
 
@@ -239,8 +237,9 @@ function layoutGallery(): GalleryLayout {
         outerH,
         labelBelow: !!d.pair || !!items[j + 1]?.display.pair,
         pilaster: !d.pair,
-        spot: spotFor(outerW, outerH, y, ART_X - TRACK_X - standoff),
+        spots: [spotFor(outerW, outerH, y, ART_X - TRACK_X - standoff)],
         light: room.light,
+        wall: room.wall,
         haze: room.haze,
       });
 
@@ -269,8 +268,11 @@ function layoutGallery(): GalleryLayout {
   const hd = hero.display;
   const heroW = hd.w + 2 * (hd.mat + hd.frame);
   const heroH = hd.h + 2 * (hd.mat + hd.frame);
-  const zBack = z - 3;
-  const heroZ = zBack + 0.01;
+  const zBack = z - FINALE_DEPTH;
+  const heroZ = zBack + FINALE_PANEL_T + 0.01;
+  const heroY = FLOOR_Y + HERO_BOTTOM + heroH / 2;
+  // A bench facing the closing piece
+  benches.push(heroZ + 5.5);
   works.push({
     index: works.length,
     slug: hero.slug,
@@ -278,7 +280,7 @@ function layoutGallery(): GalleryLayout {
     category: hero.category,
     src: hero.src,
     room: hero.room,
-    position: [0, HERO_Y, heroZ],
+    position: [0, heroY, heroZ],
     rotationY: 0,
     side: 0,
     hero: true,
@@ -287,19 +289,22 @@ function layoutGallery(): GalleryLayout {
     outerH: heroH,
     labelBelow: false,
     pilaster: false,
-    spot: HERO_SPOT,
+    // Lit from both side tracks, so nothing hangs in front of it
+    spots: [-1, 1].map((sx) => spotFor(heroW, heroH, heroY, 4.6, 40, sx * TRACK_X)),
     light: ROOMS[hero.room].light,
+    wall: FINALE_PANEL_TINT,
     haze: ROOMS[hero.room].haze,
   });
   stopOfWork.push(stops.length);
   stops.push({
     kind: 'work',
-    pos: new THREE.Vector3(0, 0.3, heroZ + 9),
-    look: new THREE.Vector3(0, HERO_Y, heroZ),
+    // Pull back and widen the lens, so the whole end wall is revealed at once
+    pos: new THREE.Vector3(0, 0.35, heroZ + 13),
+    look: new THREE.Vector3(0, heroY - 0.2, heroZ),
     normal: new THREE.Vector3(0, 0, 1),
     size: heroW,
     sizeH: heroH,
-    fov: 60,
+    fov: 68,
     workIndex: works.length - 1,
     room: hero.room,
   });
@@ -667,6 +672,18 @@ function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
         <PaintMaterial color={lastRoom.paint.wall} wash={lastRoom.paint.wash} surface={endWall} />
       </mesh>
 
+      {/* Finale: a dark panel that sets the closing piece apart, edged in brass */}
+      <mesh position={[0, FLOOR_Y + height / 2, layout.zBack + FINALE_PANEL_T / 2]}>
+        <boxGeometry args={[FINALE_PANEL_W, height, FINALE_PANEL_T]} />
+        <PaintMaterial color={FINALE_PANEL_TINT} wash={1.1} surface={endWall} />
+      </mesh>
+      {[-1, 1].map((side) => (
+        <mesh key={`inlay-${side}`} position={[side * (FINALE_PANEL_W / 2 + 0.015), FLOOR_Y + height / 2, layout.zBack + FINALE_PANEL_T / 2]}>
+          <boxGeometry args={[0.03, height, FINALE_PANEL_T + 0.02]} />
+          <meshStandardMaterial color="#b0915a" roughness={0.35} metalness={0.8} />
+        </mesh>
+      ))}
+
       {/* Doorways between rooms */}
       {layout.partitions.map((p) => (
         <Partition
@@ -759,6 +776,7 @@ function ReflectedArchitecture({ layout }: { layout: GalleryLayout }) {
   const lastRoom = layout.rooms[layout.rooms.length - 1];
   const paintColor = (paint: Paint) => new THREE.Color(paint.wall).multiplyScalar(paint.wash + AMBIENT_SHARE);
   const endColor = useMemo(() => paintColor(lastRoom.paint), [lastRoom.paint]);
+  const panelColor = useMemo(() => new THREE.Color(FINALE_PANEL_TINT).multiplyScalar(1.1 + AMBIENT_SHARE), []);
   const partitionColors = useMemo(
     () => layout.partitions.map((p) => paintColor(layout.rooms[p.room].paint)),
     [layout]
@@ -773,6 +791,10 @@ function ReflectedArchitecture({ layout }: { layout: GalleryLayout }) {
       <mesh position={[0, FLOOR_Y + height / 2, layout.zBack]} raycast={noRaycast}>
         <planeGeometry args={[WALL_X * 2, height]} />
         <meshBasicMaterial color={endColor} map={washMap ?? undefined} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh position={[0, FLOOR_Y + height / 2, layout.zBack + FINALE_PANEL_T]} raycast={noRaycast}>
+        <planeGeometry args={[FINALE_PANEL_W, height]} />
+        <meshBasicMaterial color={panelColor} map={washMap ?? undefined} side={THREE.DoubleSide} />
       </mesh>
       {layout.partitions.map((p, i) => (
         <group key={p.room} position={[0, 0, p.z]}>
@@ -868,16 +890,27 @@ function LightBeam({ rig, color, intensity, haze }: {
  * Low-quality stand-in for a spotlight: a soft additive pool painted on the
  * wall behind the frame. No real light, so no per-pixel lighting cost.
  */
-function WallWash({ width, height, color, intensity }: {
+function WallWash({ width, height, color, wall, intensity }: {
   width: number;
   height: number;
   color: string;
+  wall: string;
   intensity: React.MutableRefObject<number>;
 }) {
   const mat = useRef<THREE.MeshBasicMaterial>(null);
   const texture = useMemo(() => getPoolTexture(), []);
+  // Light picks up the paint it lands on: tint the pool with the wall colour,
+  // and add less of it on pale walls so they do not blow out
+  const { tint, strength } = useMemo(() => {
+    const paint = new THREE.Color(wall);
+    const luminance = 0.2126 * paint.r + 0.7152 * paint.g + 0.0722 * paint.b;
+    return {
+      tint: new THREE.Color(color).multiply(paint),
+      strength: THREE.MathUtils.lerp(0.9, 0.2, Math.min(1, luminance * 1.3)),
+    };
+  }, [color, wall]);
   useFrame(() => {
-    if (mat.current) mat.current.opacity = 0.2 * intensity.current;
+    if (mat.current) mat.current.opacity = strength * intensity.current;
   });
   if (!texture) return null;
   return (
@@ -886,9 +919,9 @@ function WallWash({ width, height, color, intensity }: {
       <meshBasicMaterial
         ref={mat}
         map={texture}
-        color={color}
+        color={tint}
         transparent
-        opacity={0.2}
+        opacity={strength}
         depthWrite={false}
         blending={THREE.AdditiveBlending}
       />
@@ -896,9 +929,10 @@ function WallWash({ width, height, color, intensity }: {
   );
 }
 
-function ArtSpotlight({ rig, color, haze, ceilingLocalY, intensity, lit, washSize }: {
+function ArtSpotlight({ rig, color, wall, haze, ceilingLocalY, intensity, lit, washSize }: {
   rig: SpotRig;
   color: string;
+  wall: string;
   haze: number;
   ceilingLocalY: number;
   intensity: React.MutableRefObject<number>;
@@ -952,7 +986,7 @@ function ArtSpotlight({ rig, color, haze, ceilingLocalY, intensity, lit, washSiz
           <object3D ref={target} position={rig.target} />
         </>
       ) : (
-        washSize && <WallWash width={washSize[0]} height={washSize[1]} color={color} intensity={intensity} />
+        washSize && <WallWash width={washSize[0]} height={washSize[1]} color={color} wall={wall} intensity={intensity} />
       )}
       <LightBeam rig={rig} color={color} intensity={intensity} haze={haze} />
     </group>
@@ -1287,15 +1321,19 @@ function GalleryPanel({ work, focused, anyFocused, lit, reflect, onSelect, onHov
         </mesh>
       )}
 
-      <ArtSpotlight
-        rig={work.spot}
-        color={work.light}
-        haze={work.haze}
-        ceilingLocalY={ceilingLocalY}
-        intensity={lightLevel}
-        lit={lit}
-        washSize={isPlinth ? null : [outerW, outerH]}
-      />
+      {work.spots.map((rig, i) => (
+        <ArtSpotlight
+          key={i}
+          rig={rig}
+          color={work.light}
+          wall={work.wall}
+          haze={work.haze}
+          ceilingLocalY={ceilingLocalY}
+          intensity={lightLevel}
+          lit={lit}
+          washSize={isPlinth || i > 0 ? null : [outerW, outerH]}
+        />
+      ))}
       <FloorPool
         y={floorLocalY + 0.01}
         z={work.hero ? 2.4 : 0.9}
@@ -1395,7 +1433,7 @@ function CameraRig({ stops, stopOfWork, nav, onStopChange, onUserMove, progressD
     };
   }, [gl, nav, last, onUserMove]);
 
-  useFrame((_, rawDelta) => {
+  useFrame((state, rawDelta) => {
     const delta = Math.min(rawDelta, 0.1);
     const n = nav.current;
     const { pos, look, stopLook, forward, dir, right, up, m, q, focusPos, focusLook } = scratch;
@@ -1462,8 +1500,11 @@ function CameraRig({ stops, stopOfWork, nav, onStopChange, onUserMove, progressD
       right.crossVectors(dir, up).normalize();
       focusLook.copy(fs.look);
       if (desktop) {
+        // Step sideways rather than turn, so the work stays square to the lens
         const visibleW = 2 * d * tanHalf * aspect;
-        focusLook.addScaledVector(right, (Math.min(CAPTION_WIDTH, width) / (2 * width)) * visibleW);
+        const shift = (Math.min(CAPTION_WIDTH, width) / (2 * width)) * visibleW;
+        focusLook.addScaledVector(right, shift);
+        focusPos.addScaledVector(right, shift);
       } else {
         focusLook.addScaledVector(up, -0.22 * 2 * d * tanHalf);
       }
@@ -1477,6 +1518,11 @@ function CameraRig({ stops, stopOfWork, nav, onStopChange, onUserMove, progressD
     right.crossVectors(dir, up).normalize();
     look.addScaledVector(right, mouse.current.x * 1.1 * freedom);
     look.addScaledVector(up, -mouse.current.y * 0.5 * freedom);
+    // ...and the body shifts with it, plus a slow idle sway, so near and far
+    // objects slide against each other and the room reads as deep
+    const t = state.clock.elapsedTime;
+    pos.addScaledVector(right, mouse.current.x * 0.3 * freedom + Math.sin(t * 0.31) * 0.035);
+    pos.addScaledVector(up, -mouse.current.y * 0.14 * freedom + Math.sin(t * 0.23 + 1.3) * 0.022);
 
     const k = 1 - Math.exp(-6 * delta);
     if (n.jump) {
