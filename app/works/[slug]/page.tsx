@@ -1,15 +1,23 @@
-import Footer from '@/components/Footer';
+import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
+import ProjectView from '@/components/ProjectView';
+import { galleryWorks, getGalleryEntry } from '@/data/gallery';
+
+export function generateStaticParams() {
+  return galleryWorks.map((w) => ({ slug: w.slug }));
+}
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  const entry = getGalleryEntry(slug);
+  return { title: entry ? `${entry.title} — Meowhlock Studio` : 'Meowhlock Studio' };
+}
 
 export default async function WorkSinglePage({ params }: { params: Promise<{ slug: string }> }) {
-  const resolvedParams = await params;
-  return (
-    <main className="min-h-screen bg-[#0a0a0a] pt-32 pb-12 flex flex-col justify-between">
-      <div className="flex-grow flex items-center justify-center">
-        <h1 className="text-4xl md:text-6xl uppercase tracking-tighter">
-          {resolvedParams.slug.replace(/-/g, ' ')}
-        </h1>
-      </div>
-      <Footer />
-    </main>
-  );
+  const { slug } = await params;
+  const entry = getGalleryEntry(slug);
+  if (!entry) notFound();
+
+  const next = galleryWorks[entry.number % galleryWorks.length];
+  return <ProjectView entry={entry} next={next} />;
 }
