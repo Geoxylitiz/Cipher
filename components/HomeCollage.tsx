@@ -329,6 +329,8 @@ type NavState = {
   jump: boolean;           // place the camera instantly (returning from a project)
 };
 
+const noRaycast = () => null;
+
 /* Scanned plaster surfaces (see lib/surfaces.ts) */
 // Walls are painted, not raw plaster: only the scan's relief (normal + roughness)
 // is used, so light rakes across real surface texture on clean paint.
@@ -699,6 +701,98 @@ function MuseumArchitecture({ layout }: { layout: GalleryLayout }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Reflection — a cheap, unlit copy of the building, drawn upside     */
+/*  down under the floor. The floor lets it show through at glancing   */
+/*  angles (see floor.tsx), which reads as a polished-floor reflection */
+/*  without rendering the scene twice.                                 */
+/* ------------------------------------------------------------------ */
+const AMBIENT_SHARE = 0.25; // roughly what the fill light adds to a painted wall
+
+function ReflectedRoom({ span }: { span: RoomSpan }) {
+  const height = CEILING_Y - FLOOR_Y;
+  const length = span.zStart - span.zEnd;
+  const centerZ = (span.zStart + span.zEnd) / 2;
+  const { paint } = span;
+  const washMap = useMemo(() => getWashTexture(), []);
+  const colors = useMemo(
+    () => ({
+      wall: new THREE.Color(paint.wall).multiplyScalar(paint.wash + AMBIENT_SHARE),
+      ceiling: new THREE.Color(paint.ceiling).multiplyScalar(paint.wash * 0.55 + AMBIENT_SHARE),
+      // Dimmer than the real lay-light: a honed floor only gives back a soft sheen
+      sky: new THREE.Color(span.light).multiplyScalar(0.55),
+    }),
+    [paint, span.light]
+  );
+
+  return (
+    <group>
+      <mesh position={[0, CEILING_Y, centerZ]} rotation={[Math.PI / 2, 0, 0]} raycast={noRaycast}>
+        <planeGeometry args={[WALL_X * 2, length]} />
+        <meshBasicMaterial color={colors.ceiling} side={THREE.DoubleSide} />
+      </mesh>
+      {span.room >= 0 && (
+        <mesh position={[0, CEILING_Y - 0.04, centerZ]} rotation={[Math.PI / 2, 0, 0]} raycast={noRaycast}>
+          <planeGeometry args={[SKY_W, length - 3.2]} />
+          <meshBasicMaterial color={colors.sky} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+      {[-1, 1].map((side) => (
+        <mesh
+          key={side}
+          position={[side * WALL_X, FLOOR_Y + height / 2, centerZ]}
+          rotation={[0, (-side * Math.PI) / 2, 0]}
+          raycast={noRaycast}
+        >
+          <planeGeometry args={[length, height]} />
+          <meshBasicMaterial color={colors.wall} map={washMap ?? undefined} side={THREE.DoubleSide} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function ReflectedArchitecture({ layout }: { layout: GalleryLayout }) {
+  const height = CEILING_Y - FLOOR_Y;
+  const sideW = WALL_X - DOOR_W / 2;
+  const lintelH = CEILING_Y - (FLOOR_Y + DOOR_H);
+  const washMap = useMemo(() => getWashTexture(), []);
+  const lastRoom = layout.rooms[layout.rooms.length - 1];
+  const paintColor = (paint: Paint) => new THREE.Color(paint.wall).multiplyScalar(paint.wash + AMBIENT_SHARE);
+  const endColor = useMemo(() => paintColor(lastRoom.paint), [lastRoom.paint]);
+  const partitionColors = useMemo(
+    () => layout.partitions.map((p) => paintColor(layout.rooms[p.room].paint)),
+    [layout]
+  );
+
+  return (
+    // Mirror the building in the floor plane
+    <group position={[0, 2 * FLOOR_Y, 0]} scale={[1, -1, 1]}>
+      {layout.rooms.map((span) => (
+        <ReflectedRoom key={span.room} span={span} />
+      ))}
+      <mesh position={[0, FLOOR_Y + height / 2, layout.zBack]} raycast={noRaycast}>
+        <planeGeometry args={[WALL_X * 2, height]} />
+        <meshBasicMaterial color={endColor} map={washMap ?? undefined} side={THREE.DoubleSide} />
+      </mesh>
+      {layout.partitions.map((p, i) => (
+        <group key={p.room} position={[0, 0, p.z]}>
+          {[-1, 1].map((side) => (
+            <mesh key={side} position={[side * (DOOR_W / 2 + sideW / 2), FLOOR_Y + height / 2, 0]} raycast={noRaycast}>
+              <boxGeometry args={[sideW, height, PARTITION_T]} />
+              <meshBasicMaterial color={partitionColors[i]} map={washMap ?? undefined} side={THREE.DoubleSide} />
+            </mesh>
+          ))}
+          <mesh position={[0, FLOOR_Y + DOOR_H + lintelH / 2, 0]} raycast={noRaycast}>
+            <boxGeometry args={[DOOR_W, lintelH, PARTITION_T]} />
+            <meshBasicMaterial color={partitionColors[i]} side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Light beam — a soft additive cone that fakes light through haze    */
 /* ------------------------------------------------------------------ */
 const beamVertex = /* glsl */ `
@@ -849,7 +943,7 @@ function ArtSpotlight({ rig, color, haze, ceilingLocalY, intensity, lit, washSiz
             ref={spot}
             position={rig.spot}
             angle={rig.angle}
-            penumbra={0.7}
+            penumbra={1}
             intensity={rig.intensity}
             distance={16}
             decay={2}
@@ -969,19 +1063,21 @@ function useLabelTexture(index: number, title: string, category: string) {
 /* ------------------------------------------------------------------ */
 /*  A single artwork: framed, unframed canvas, or leaning on a plinth  */
 /* ------------------------------------------------------------------ */
-const noRaycast = () => null;
 const PLINTH_DEPTH = 0.8;
+const FILLET = 0.02; // width of the gilt lip inside a frame
 
-function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange }: {
+function GalleryPanel({ work, focused, anyFocused, lit, reflect, onSelect, onHoverChange }: {
   work: GalleryWork;
   focused: boolean;
   anyFocused: boolean;
   lit: boolean; // real spotlight (high quality) vs. faked glow (low quality)
+  reflect: boolean; // draw this work's reflection under the floor
   onSelect: (index: number) => void;
   onHoverChange: (hovered: boolean) => void;
 }) {
   const imageMat = useRef<THREE.MeshStandardMaterial>(null);
   const matMat = useRef<THREE.MeshStandardMaterial>(null);
+  const mirrorMat = useRef<THREE.MeshBasicMaterial>(null);
   const [hovered, setHovered] = useState(false);
   const lightLevel = useRef(1);
   const d = work.display;
@@ -1024,6 +1120,8 @@ function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange 
     if (matMat.current) {
       matMat.current.emissiveIntensity = lit ? 0 : 0.3 * lightLevel.current;
     }
+    // The reflection follows the light on the work
+    if (mirrorMat.current) mirrorMat.current.color.setScalar(0.7 * lightLevel.current);
   });
 
   // The custom cursor reads "View", or "Open" once the work is in close-up
@@ -1104,6 +1202,23 @@ function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange 
                   <meshStandardMaterial ref={matMat} color="#e6e1d8" roughness={0.92} emissive="#e6e1d8" emissiveIntensity={0} />
                 </mesh>
               )}
+              {/* Gilt fillet: a thin lip where the frame meets the mat */}
+              {d.mat > 0 && d.frameMetal < 0.5 && (
+                <>
+                  {[-1, 1].map((s) => (
+                    <mesh key={`fh${s}`} position={[0, s * (d.h / 2 + d.mat - FILLET / 2), 0.05]} raycast={noRaycast}>
+                      <boxGeometry args={[d.w + 2 * d.mat, FILLET, 0.028]} />
+                      <meshStandardMaterial color="#b0915a" roughness={0.35} metalness={0.8} />
+                    </mesh>
+                  ))}
+                  {[-1, 1].map((s) => (
+                    <mesh key={`fv${s}`} position={[s * (d.w / 2 + d.mat - FILLET / 2), 0, 0.05]} raycast={noRaycast}>
+                      <boxGeometry args={[FILLET, d.h + 2 * d.mat, 0.028]} />
+                      <meshStandardMaterial color="#b0915a" roughness={0.35} metalness={0.8} />
+                    </mesh>
+                  ))}
+                </>
+              )}
             </>
           )}
 
@@ -1134,6 +1249,34 @@ function GalleryPanel({ work, focused, anyFocused, lit, onSelect, onHoverChange 
           <boxGeometry args={[outerW + 0.5, -outerH / 2 - floorLocalY, PLINTH_DEPTH]} />
           <meshStandardMaterial color="#d9d4ca" roughness={0.8} />
         </mesh>
+      )}
+
+      {/* Reflection in the floor: flat, unlit copies mirrored below floor level */}
+      {reflect && (
+        <group position={[0, 2 * floorLocalY, 0]} scale={[1, -1, 1]}>
+          {!isCanvas && (
+            <mesh position={[0, 0, 0.03]} raycast={noRaycast}>
+              <planeGeometry args={[outerW, outerH]} />
+              <meshBasicMaterial color={d.frameColor} side={THREE.DoubleSide} />
+            </mesh>
+          )}
+          {!isCanvas && d.mat > 0 && (
+            <mesh position={[0, 0, 0.036]} raycast={noRaycast}>
+              <planeGeometry args={[d.w + 2 * d.mat, d.h + 2 * d.mat]} />
+              <meshBasicMaterial color="#8f8b84" side={THREE.DoubleSide} />
+            </mesh>
+          )}
+          <mesh position={[0, 0, imageZ]} raycast={noRaycast}>
+            <planeGeometry args={[d.w, d.h]} />
+            <meshBasicMaterial ref={mirrorMat} map={texture} side={THREE.DoubleSide} />
+          </mesh>
+          {isPlinth && (
+            <mesh position={[0, (floorLocalY - outerH / 2) / 2, 0]} raycast={noRaycast}>
+              <boxGeometry args={[outerW + 0.5, -outerH / 2 - floorLocalY, PLINTH_DEPTH]} />
+              <meshBasicMaterial color="#86827b" side={THREE.DoubleSide} />
+            </mesh>
+          )}
+        </group>
       )}
 
       {/* Label: beside the work, below it (pairs), or on the plinth */}
@@ -1494,7 +1637,8 @@ function Scene({ layout, nav, focused, quality, onDecline, onSelect, onStopChang
 
       <Dust zFront={layout.zFront} zBack={layout.zBack} count={high ? 450 : 200} />
 
-      <Floor zFront={layout.zFront} zBack={layout.zBack} width={CORRIDOR_WIDTH} />
+      <Floor zFront={layout.zFront} zBack={layout.zBack} width={CORRIDOR_WIDTH} reflective={high} />
+      {high && <ReflectedArchitecture layout={layout} />}
 
       <MuseumArchitecture layout={layout} />
 
@@ -1505,6 +1649,7 @@ function Scene({ layout, nav, focused, quality, onDecline, onSelect, onStopChang
           focused={focused === work.index}
           anyFocused={focused !== null}
           lit={high}
+          reflect={high}
           onSelect={onSelect}
           onHoverChange={handleHoverChange}
         />
@@ -1662,6 +1807,10 @@ export default function HomeCollage() {
 
   return (
     <div className="w-full relative h-screen overflow-hidden bg-[#070707]">
+      {/* Soft scrims so the header and readout stay legible in the bright room */}
+      <div className="absolute inset-x-0 top-0 h-28 z-[15] pointer-events-none bg-gradient-to-b from-black/45 to-transparent" />
+      <div className="absolute inset-x-0 bottom-0 h-56 z-[15] pointer-events-none bg-gradient-to-t from-black/45 to-transparent" />
+
       {/* Room + counter */}
       <div
         className="absolute left-6 md:left-10 bottom-20 md:bottom-12 z-20 pointer-events-none text-[#f5f5f2] transition-opacity duration-700"
